@@ -125,3 +125,103 @@ select {
   background: var(--surface);
   color: var(--text);
 }
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+}
+
+.status[data-level='info'] {
+  color: var(--muted);
+}
+
+.banner {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  color: var(--text);
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.tabs button {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+}
+
+.tabs button[aria-selected='true'] {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.keyboard-frame {
+  overflow-x: auto;
+}
+
+svg.keyboard {
+  display: block;
+  width: 100%;
+  min-width: 560px;
+  height: auto;
+}
+
+.key rect {
+  fill: var(--surface);
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.key text {
+  fill: var(--text);
+  font-family: inherit;
+  pointer-events: none;
+  user-select: none;
+}
+
+.key {
+  cursor: pointer;
+  outline: none;
+}
+
+.key:hover rect,
+.key:focus-visible rect {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.key--transparent text {
+  fill: var(--muted);
+}
+
+.key--none rect {
+  fill: var(--bg);
+  stroke-dasharray: 4 3;
+}
+
+.key--selected rect {
+  fill: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.key-details {
+  margin: 12px 0 0;
+  color: var(--muted);
+}

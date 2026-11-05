@@ -194,4 +194,21 @@ export class KeycodeCatalog {
   entry(code: number): KeycodeEntry | undefined {
     return this.byValue.get(code);
   }
+
+  /** Libellé affiché sur la touche (libellés Vial ; « LSft (kc) » + touche interne pour les masqués). */
+  label(code: number): string {
+    if (MASKED.has(code & 0xff00)) {
+      const outer = this.byValue.get(code & 0xff00);
+      const inner = this.byValue.get(code & 0x00ff);
+      if (outer && inner) return outer.label.replace('(kc)', inner.label.split('\n').at(-1) ?? '');
+    }
+    return this.byValue.get(code)?.label ?? this.serialize(code);
+  }
+
+  /** Infobulle : nom Vial exact, suivi de la description s'il y en a une. */
+  tooltip(code: number): string {
+    const name = this.serialize(code);
+    const description = MASKED.has(code & 0xff00) ? undefined : this.byValue.get(code)?.tooltip;
+    return description ? `${name} : ${description}` : name;
+  }
 }

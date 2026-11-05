@@ -6,11 +6,19 @@
   "theme.light": "Clair",
   "theme.dark": "Sombre",
   "support.ok": "Votre navigateur peut communiquer avec le clavier.",
-  "support.noWebhid": "Ce navigateur ne permet pas d'accéder au clavier (WebHID). Utilisez Chrome ou Edge.",
+  "support.noWebhid": "Ce navigateur ne permet pas d'accéder au clavier (WebHID). Utilisez Chrome ou Edge, ou essayez le mode démo.",
   "support.insecure": "Page ouverte hors contexte sécurisé : l'accès au clavier est bloqué. Ouvrez-la via https:// ou http://localhost (pas par l'adresse IP du réseau).",
   "connect.button": "Connecter le clavier",
   "connect.none": "Aucun clavier sélectionné.",
   "connect.opened": "Connecté à « {name} » ({vid}:{pid}).",
+  "connect.loading": "Lecture du clavier…",
+  "connect.ready": "« {name} » : {layers} couches, {keys} touches.",
+  "connect.disconnected": "Clavier débranché.",
   "connect.error": "Impossible d'ouvrir le clavier : {message}",
-  "connect.linuxHint": "Sous Linux, vérifiez la règle udev donnant accès à /dev/hidraw* (voir le README)."
+  "connect.linuxHint": "Sous Linux, vérifiez la règle udev donnant accès à /dev/hidraw* (voir le README). Fermez Vial s'il est ouvert.",
+  "demo.button": "Essayer sans clavier (démo)",
+  "demo.banner": "Mode démo : clavier simulé, rien n'est écrit sur un vrai clavier.",
+  "layers.label": "Couches",
+  "key.none": "Cliquez une touche du dessin pour la sélectionner.",
+  "key.selected": "Couche {layer}, touche [{position}] : {name}"
 }
