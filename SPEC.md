@@ -31,7 +31,7 @@ et des cases à cocher qui constituent la définition de « terminé ».
 - [x] Éditer n'importe quelle touche de n'importe quelle couche en cliquant sur un dessin fidèle du clavier.
 - [x] Régler le RGB (effet, couleur, luminosité, vitesse) avec effet **immédiat** sur le clavier, puis enregistrer.
 - [x] Sauvegarder / restaurer la configuration dans un fichier **compatible `.vil`** (Vial, Pipette).
-- [ ] Éditer macros, tap-dance et combos.
+- [x] Éditer macros, tap-dance et combos.
 - [x] Afficher les étiquettes **telles qu'elles s'écrivent en AZERTY** (bascule QWERTY possible).
 
 **Non-objectifs (étape 1)**
@@ -138,8 +138,8 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
 - [x] Recherche par nom ou par caractère tapé (« ù » trouve `KC_QUOT` en AZERTY).
 - [x] Saisie avancée : keycode QMK brut (`LT(2, KC_SPC)`, `0x5225`) avec validation.
 - [x] Écriture immédiate (`0x05`), relecture de contrôle, mise à jour du dessin ; échec → retour arrière + erreur.
-- [ ] **Annuler / rétablir** sur toute la session (touches, macros, tap-dance, combos) ; l'annulation réécrit
-  l'ancienne valeur dans le clavier. *(fait pour les touches ; macros, tap-dance et combos à brancher)*
+- [x] **Annuler / rétablir** sur toute la session (touches, macros, tap-dance, combos) ; l'annulation réécrit
+  l'ancienne valeur dans le clavier.
 - [ ] *(reporté, cf. §12)* Glisser-déposer d'une touche sur une autre (échange) et copier / coller d'une couche entière.
 - [ ] Garde-fous : impossible de retirer **la dernière touche** permettant de quitter une couche de jeu
   (`SEL x3`, `TO(0)`, `MO`…) sans avertissement ; `QK_BOOT` signalé comme « fige le clavier ».
@@ -162,10 +162,12 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
 - [x] Rappel : sur les couches FPS / MMO / sélecteur, des couleurs imposées masquent l'effet (`ledmaps`).
 
 ### 5.6 Macros, tap-dance, combos
-- [ ] Macros : liste, éditeur d'actions (texte, appui, relâche, frappe, délai), taille du buffer affichée ;
+- [x] Macros : liste, éditeur d'actions (texte, appui, relâche, frappe, délai), taille du buffer affichée ;
   écriture soumise au déverrouillage.
-- [ ] Tap-dance : appui / maintien / double appui / appui-maintien + délai (ms).
-- [ ] Combos : jusqu'à 4 touches → 1 keycode ; key overrides si le firmware en expose.
+- [x] Tap-dance : appui / maintien / double appui / appui-maintien + délai (ms).
+- [x] Combos : jusqu'à 4 touches → 1 keycode ; key overrides si le firmware en expose.
+  *(key overrides et alt-repeat : sauvegardés / restaurés par le `.vil`, pas encore éditables)*
+- [x] Texte de macro : avertissement « tapé en QWERTY » et conversion en frappes AZERTY (Shift / AltGr compris).
 - [x] Nombre d'entrées lu via `0xFE 0x0D 0x00`, jamais supposé.
 
 ### 5.7 Sauvegarde / restauration

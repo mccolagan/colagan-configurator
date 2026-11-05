@@ -496,3 +496,193 @@ dialog.unlock progress {
   height: 12px;
   accent-color: var(--accent);
 }
+
+.dyn-help {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.dynamic > .tabs {
+  margin: 4px 0 12px;
+}
+
+.dyn-scroll {
+  max-height: 460px;
+  overflow: auto;
+}
+
+.dyn-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.dyn-table th,
+.dyn-table td {
+  padding: 3px 4px;
+  text-align: left;
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+.dyn-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.dyn-table tbody th {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.dyn-table tr.is-used th {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.dyn-table input[type='number'] {
+  width: 6em;
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button.keycode.slot {
+  min-width: 72px;
+  min-height: 34px;
+}
+
+.macros__layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) 1fr;
+  gap: 16px;
+}
+
+@media (width <= 720px) {
+  .macros__layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.macro-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 460px;
+  overflow-y: auto;
+}
+
+button.macro-list__item {
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.macro-list__item.is-selected {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.macro-editor h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.macro-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.macro-action__type {
+  min-width: 5em;
+  color: var(--muted);
+}
+
+.macro-action input[type='text'] {
+  flex: 1 1 200px;
+}
+
+.macro-action input {
+  font: inherit;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.macro-action input[type='number'] {
+  width: 7em;
+}
+
+.macro-action__keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+}
+
+button.keycode.chip {
+  min-height: 30px;
+  padding: 2px 8px;
+}
+
+.macro-action__tools {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.macro-action__tools button {
+  padding: 2px 8px;
+}
+
+.macro-action__warn {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--warn);
+  font-size: 0.85rem;
+}
+
+.macro-action__warn button {
+  padding: 2px 10px;
+}
+
+.macro-usage[data-level='error'] {
+  color: var(--error);
+}
+
+.macro-footer {
+  align-items: center;
+}
+
+.macro-footer .macro-usage {
+  margin-right: auto;
+  color: var(--muted);
+}
+
+dialog.keycode-dialog {
+  width: min(900px, calc(100vw - 32px));
+  max-width: none;
+}
+
+dialog.keycode-dialog .picker {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}

@@ -59,3 +59,21 @@ export function azertyOutput(code: number): string | undefined {
   if (outer === 0x1400) return chars.altgr;
   return undefined;
 }
+
+const SPECIAL_CHARS: Readonly<Record<string, number>> = { ' ': 0x2c, '\n': 0x28, '\t': 0x2b };
+
+/** Caractère -> keycode qui le tape sur un OS en AZERTY FR (Shift / AltGr inclus), le premier trouvé. */
+const REVERSE: ReadonlyMap<string, number> = (() => {
+  const map = new Map<string, number>(Object.entries(SPECIAL_CHARS));
+  const add = (char: string | undefined, code: number): void => {
+    if (char !== undefined && !map.has(char)) map.set(char, code);
+  };
+  for (const [code, chars] of TABLE) add(chars.base, code);
+  for (const [code, chars] of TABLE) add(chars.shift, 0x0200 | code);
+  for (const [code, chars] of TABLE) add(chars.altgr, 0x1400 | code);
+  return map;
+})();
+
+export function azertyKeycodeFor(char: string): number | undefined {
+  return REVERSE.get(char);
+}

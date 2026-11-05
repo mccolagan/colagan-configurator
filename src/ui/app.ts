@@ -2,7 +2,8 @@ import { createDemoKeyboard } from '../demo/demo-keyboard';
 import { detectHidSupport, type HidSupport } from '../env/support';
 import { readLabelLayout, saveLabelLayout } from '../env/label-layout';
 import { applyTheme, readTheme, type ThemeChoice } from '../env/theme';
-import { KeyEditor, type KeyChange } from '../editor/key-editor';
+import { DynamicState } from '../editor/dynamic-state';
+import { KeyEditor, type Change, type DynamicStore, type KeyChange } from '../editor/key-editor';
 import { t, type MessageKey } from '../i18n';
 import { KeycodeCatalog } from '../keycodes/catalog';
 import { flatLabel, keyLabel, type LabelLayout } from '../keycodes/labels';
@@ -16,6 +17,7 @@ import { confirmDialog } from './confirm';
 import { keyId, renderKeyboard, type KeyView } from './keyboard-view';
 import { KeycodePicker, RISKY_KEYCODES } from './keycode-picker';
 import { renderBackupPanel } from './backup-panel';
+import { DynamicPanel } from './dynamic-panel';
 import { renderRgbPanel } from './rgb-panel';
 import { unlockKeyboard } from './unlock-dialog';
 
@@ -37,6 +39,8 @@ interface Session {
   readonly device?: HIDDevice;
   readonly editor: KeyEditor;
   readonly rgb: RgbController | undefined;
+  /** Macros, tap-dance et combos : lus à la première ouverture de l'onglet « Macros & co ». */
+  dynamic: DynamicState | undefined;
 }
 
 interface WorkspaceView {
@@ -57,7 +61,8 @@ export class App {
   private selected: { row: number; col: number } | undefined;
   private layout: LabelLayout = readLabelLayout();
   private view: WorkspaceView | undefined;
-  private section: 'keys' | 'rgb' | 'backup' = 'keys';
+  private section: 'keys' | 'rgb' | 'dynamic' | 'backup' = 'keys';
+  private dynamicPanel: DynamicPanel | undefined;
   private readonly support = detectHidSupport(window);
 
   constructor(private readonly root: HTMLElement) {}
@@ -207,7 +212,7 @@ export class App {
       profile: profileFor(info.uid),
       demo,
       ...(device ? { device } : {}),
-      editor: new KeyEditor(client),
+      editor: new KeyEditor(client, this.dynamicStore()),
       rgb: info.rgb
         ? new RgbController(transport, info.rgb.initialMode, {
             maxBrightness: info.rgb.info.maxBrightness,
@@ -219,7 +224,9 @@ export class App {
             },
           })
         : undefined,
+      dynamic: undefined,
     };
+    this.dynamicPanel = undefined;
     this.layer = 0;
     this.selected = undefined;
     this.status(
@@ -249,8 +256,6 @@ export class App {
       workspace.append(banner);
     }
 
-    const toolbar = document.createElement('div');
-    toolbar.className = 'toolbar';
     const tabs = document.createElement('div');
     tabs.className = 'tabs';
     tabs.setAttribute('role', 'tablist');
@@ -262,7 +267,6 @@ export class App {
     const redo = this.button(t('edit.redo'), 'Ctrl+Maj+Z', () => void this.redo());
     redo.id = 'redo';
     history.append(undo, redo);
-    toolbar.append(tabs, history);
 
     const frame = document.createElement('div');
     frame.className = 'keyboard-frame';
@@ -278,7 +282,9 @@ export class App {
     const picker = this.createPicker(session);
     const keysSection = document.createElement('div');
     keysSection.id = 'section-keys';
-    keysSection.append(toolbar, frame, details, editStatus, picker.element);
+    keysSection.append(tabs, frame, details, picker.element);
+    const dynamicSection = document.createElement('div');
+    dynamicSection.id = 'section-dynamic';
     const rgbSection = document.createElement('div');
     rgbSection.id = 'section-rgb';
     rgbSection.append(this.rgbContent(session));
@@ -293,6 +299,10 @@ export class App {
         ensureUnlocked: () => this.ensureUnlocked(),
         onImported: () => {
           session.editor.clear();
+          // macros / tap-dance / combos relus à la prochaine ouverture de l'onglet
+          session.dynamic = undefined;
+          this.dynamicPanel = undefined;
+          dynamicSection.replaceChildren();
           this.refresh();
         },
       }),
@@ -306,6 +316,9 @@ export class App {
       keysSection.hidden = this.section !== 'keys';
       rgbSection.hidden = this.section !== 'rgb';
       backupSection.hidden = this.section !== 'backup';
+      dynamicSection.hidden = this.section !== 'dynamic';
+      if (this.section === 'dynamic' && !dynamicSection.hasChildNodes())
+        void this.loadDynamic(dynamicSection);
       for (const tab of nav.children) {
         tab.setAttribute('aria-selected', String((tab as HTMLElement).dataset.section === this.section));
       }
@@ -313,6 +326,7 @@ export class App {
     for (const [id, label] of [
       ['keys', t('view.keys')],
       ['rgb', t('view.rgb')],
+      ['dynamic', t('view.dynamic')],
       ['backup', t('view.backup')],
     ] as const) {
       const tab = document.createElement('button');
@@ -327,9 +341,59 @@ export class App {
       nav.append(tab);
     }
     showSection();
-    workspace.append(nav, keysSection, rgbSection, backupSection);
+    const toolbar = document.createElement('div');
+    toolbar.className = 'toolbar';
+    toolbar.append(nav, history);
+    workspace.append(toolbar, editStatus, keysSection, rgbSection, dynamicSection, backupSection);
     this.view = { tabs, frame, details, editStatus, undo, redo, picker };
     this.refresh();
+  }
+
+  /** Écritures dynamiques de l'historique, déléguées à l'état chargé (refusées tant qu'il ne l'est pas). */
+  private dynamicStore(): DynamicStore {
+    const state = (): DynamicState => {
+      const dynamic = this.session?.dynamic;
+      if (!dynamic) throw new Error('macros / tap-dance / combos non chargés');
+      return dynamic;
+    };
+    return {
+      setTapDance: (index, entry) => state().setTapDance(index, entry),
+      setCombo: (index, entry) => state().setCombo(index, entry),
+      setMacros: (buffer) => state().setMacros(buffer),
+    };
+  }
+
+  private async loadDynamic(container: HTMLElement): Promise<void> {
+    const session = this.session;
+    if (!session) return;
+    const loading = document.createElement('p');
+    loading.className = 'status';
+    loading.dataset.level = 'info';
+    loading.textContent = t('dyn.loading');
+    container.replaceChildren(loading);
+    try {
+      session.dynamic ??= await DynamicState.load(session.client, session.catalog, () =>
+        this.ensureUnlocked(),
+      );
+      this.dynamicPanel = new DynamicPanel({
+        catalog: session.catalog,
+        layout: this.layout,
+        state: session.dynamic,
+        editor: session.editor,
+        report: (level, message) => {
+          this.editStatus(level, message);
+        },
+        onChanged: () => {
+          this.refresh();
+        },
+      });
+      container.replaceChildren(this.dynamicPanel.element);
+    } catch (error) {
+      loading.dataset.level = 'error';
+      loading.textContent = t('dyn.loadError', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /** Déverrouillage Vial (macros, QK_BOOT) : touches désignées par leur étiquette sur la couche 0. */
@@ -504,7 +568,7 @@ export class App {
     if (!session) return;
     try {
       const change = await (direction === 'undo' ? session.editor.undo() : session.editor.redo());
-      if (change) {
+      if (change?.kind === 'key') {
         // on affiche la couche concernée pour que l'effet soit visible
         this.layer = change.layer;
         this.selected = { row: change.row, col: change.col };
@@ -513,7 +577,13 @@ export class App {
           'info',
           t(direction === 'undo' ? 'edit.undone' : 'edit.redone', this.describe(change, code)),
         );
+      } else if (change) {
+        this.editStatus(
+          'info',
+          t(direction === 'undo' ? 'edit.undoneEntry' : 'edit.redoneEntry', { name: this.entryName(change) }),
+        );
       }
+      this.dynamicPanel?.refresh();
     } catch (error) {
       this.editStatus(
         'error',
@@ -521,6 +591,12 @@ export class App {
       );
     }
     this.refresh();
+  }
+
+  private entryName(change: Exclude<Change, KeyChange>): string {
+    if (change.kind === 'tapDance') return `TD(${String(change.index)})`;
+    if (change.kind === 'combo') return t('dyn.comboName', { n: change.index });
+    return `M${String(change.index)}`;
   }
 
   private onShortcut(event: KeyboardEvent): void {
