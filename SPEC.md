@@ -202,10 +202,13 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
   décompression de la définition, `.vil` aller-retour.
 - [ ] Playwright : parcours principaux en mode démo (connexion simulée, édition, annuler, export / import, RGB).
 - [ ] GitHub Actions : lint + tests + build à chaque push ; déploiement Pages sur `main`.
-- [ ] Table des keycodes **générée** (script versionné), pas recopiée : **valeurs** depuis
-  `vial-qmk/quantum/keycodes.h`, **noms** depuis l'interface Vial (`vial-gui`, `keycodes_v6`) car le `.vil`
-  utilise les noms historiques de Vial (`KC_BSPACE`, `KC_LSHIFT`, `KC_CAPSLOCK`, `KC_NONUS_BSLASH`, `USER00`,
-  `LSFT(KC_DOT)`, `MO(4)`, `TO(0)`…), pas les noms QMK actuels (`KC_BSPC`, `KC_LSFT`…).
+- [ ] Table des keycodes **générée** (script versionné, lecture **texte** du fichier, jamais d'exécution) depuis
+  `~/perso/clavier/vial-gui/src/main/python/keycodes/keycodes_v6.py` (clone de `vial-kb/vial-gui`, `aef8222`) :
+  dictionnaire nom Vial → valeur (519 entrées, ex. `KC_BSPACE` 0x2A, `KC_LSHIFT` 0xE1, `RM_VALU` 0x7849,
+  `QK_BOOT` 0x7C00). Le `.vil` utilise ces noms historiques, pas les alias QMK actuels (`KC_BSPC`, `KC_LSFT`…).
+- [ ] Formes calculées, absentes de la table : `USERnn` = `0x7E00 + nn` (`customKeycodes`, `USER00` = `SEL x3`),
+  `MO(n)` / `TO(n)` / `TG(n)` / `OSL(n)` / `LT(n, kc)`, modificateurs `LSFT(kc)`…, `MT(mod, kc)`, `TD(n)`, `M0..` :
+  encodage / décodage testés sur toutes les valeurs de la fixture.
 - [ ] README : usage, navigateurs supportés, règle udev Linux, mode démo, lien vers le dépôt du clavier.
 - [ ] Licence (GPL-2.0-or-later, comme le firmware) ; pas de télémétrie, pas d'appel réseau à l'exécution.
 - [ ] Bundle léger (cible < 300 ko gzip), dépendances minimales (une lib LZMA pour la définition).
