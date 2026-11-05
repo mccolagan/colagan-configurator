@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # relance à la main depuis l'onglet Actions (ex. après activation de GitHub Pages)
+  workflow_dispatch:
 
 permissions:
   contents: read
