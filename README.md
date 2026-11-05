@@ -1,12 +1,27 @@
 # Colagan Configurator
 
-Configurateur web du clavier split **Colagan V2** (firmware Vial) : édition visuelle des touches, réglage du RGB en
-direct, sauvegarde / restauration `.vil`. Communique avec le clavier depuis le navigateur via **WebHID**.
+Configurateur web du clavier split **Colagan V2** (firmware Vial) : touches et éclairage de chaque couche sur
+une même page, aperçu des LED en direct, macros / tap-dance / combos, sauvegarde / restauration `.vil`.
+Communique avec le clavier depuis le navigateur via **WebHID**.
 
 Cahier des charges et avancement : [`SPEC.md`](SPEC.md). Firmware : dépôt `colagan-pico-split-keyboard`.
 
-> État : squelette (Docker, Vite + TypeScript, lint, tests, CI). Le bouton « Connecter » ne fait encore qu'ouvrir
-> le clavier pour vérifier l'accès.
+## Fonctions
+
+- **Touches** : onglets de couche, dessin du clavier (pouces en arc), choix du keycode avec étiquettes AZERTY
+  (ou QWERTY), écriture immédiate, annuler / rétablir, garde-fous (QK_BOOT, dernière sortie d'une couche).
+- **Couleurs** (même page, mode _Couleurs_) : pinceau (palette, couleur libre, éteinte, « Effet »), clic ou
+  glisser pour peindre, Alt+clic pour reprendre une couleur, effet propre à une couche, effet global sur la
+  couche 0. Pendant l'édition, le clavier affiche la couche choisie.
+- **Éclairage sur le dessin** : _Couche affichée_ (couleurs de la couche sélectionnée, effet réel sous les touches
+  « Effet »), _Clavier en direct_ (état réel des LED, ~20 i/s), ou _Masqué_. L'onglet de la couche active sur le
+  clavier est marqué ●.
+- **Macros & co** : macros (texte converti en frappes AZERTY), tap-dance, combos.
+- **Sauvegarde** : export / import `.vil` compatible Vial, instantanés locaux avant import.
+- **Mode démo** : clavier simulé, sans matériel.
+
+Couleurs par couche et aperçu : firmware Colagan avec la commande `0xC0` v2 (voir le dépôt firmware). Avec un
+autre firmware Vial, seules les fonctions Vial / VialRGB sont proposées.
 
 ## Navigateurs
 
