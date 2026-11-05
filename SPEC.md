@@ -153,13 +153,13 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
 - [x] Bascule AZERTY / QWERTY (noms QMK) mémorisée localement ; info-bulle avec le nom QMK exact.
 
 ### 5.5 RGB en direct
-- [ ] Lecture du mode courant et de la liste des effets supportés à la connexion.
-- [ ] Contrôles : effet (liste nommée en français), couleur (roue ou H/S), luminosité (bornée au max du
+- [x] Lecture du mode courant et de la liste des effets supportés à la connexion.
+- [x] Contrôles : effet (liste nommée en français), couleur (roue ou H/S), luminosité (bornée au max du
   firmware, 64), vitesse ; chaque changement est envoyé **immédiatement** (`0x07 0x41`), avec limitation
   de débit (~20 envois/s max, dernier état garanti).
-- [ ] Bouton « Enregistrer dans le clavier » (`0x09`) ; indicateur « modifié non enregistré ».
-- [ ] « Rétablir » revient aux valeurs lues à la connexion (le firmware ne permet pas de relire l'EEPROM).
-- [ ] Rappel : sur les couches FPS / MMO / sélecteur, des couleurs imposées masquent l'effet (`ledmaps`).
+- [x] Bouton « Enregistrer dans le clavier » (`0x09`) ; indicateur « modifié non enregistré ».
+- [x] « Rétablir » revient aux valeurs lues à la connexion (le firmware ne permet pas de relire l'EEPROM).
+- [x] Rappel : sur les couches FPS / MMO / sélecteur, des couleurs imposées masquent l'effet (`ledmaps`).
 
 ### 5.6 Macros, tap-dance, combos
 - [ ] Macros : liste, éditeur d'actions (texte, appui, relâche, frappe, délai), taille du buffer affichée ;

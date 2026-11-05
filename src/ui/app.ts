@@ -9,11 +9,13 @@ import { flatLabel, keyLabel, type LabelLayout } from '../keycodes/labels';
 import { parseKle, type KeyGeometry } from '../keyboard/kle';
 import { layerName, profileFor, type KeyboardProfile } from '../profiles';
 import { KeyboardClient } from '../protocol/client';
+import { RgbController } from '../rgb/rgb-controller';
 import type { Transport } from '../protocol/packet';
 import { HidTransport } from '../transport/hid-transport';
 import { confirmDialog } from './confirm';
 import { keyId, renderKeyboard, type KeyView } from './keyboard-view';
 import { KeycodePicker, RISKY_KEYCODES } from './keycode-picker';
+import { renderRgbPanel } from './rgb-panel';
 
 // Interface raw HID de VIA / Vial
 const RAW_HID_FILTER: HIDDeviceFilter = { usagePage: 0xff60, usage: 0x61 };
@@ -32,6 +34,7 @@ interface Session {
   readonly demo: boolean;
   readonly device?: HIDDevice;
   readonly editor: KeyEditor;
+  readonly rgb: RgbController | undefined;
 }
 
 interface WorkspaceView {
@@ -52,6 +55,7 @@ export class App {
   private selected: { row: number; col: number } | undefined;
   private layout: LabelLayout = readLabelLayout();
   private view: WorkspaceView | undefined;
+  private section: 'keys' | 'rgb' = 'keys';
   private readonly support = detectHidSupport(window);
 
   constructor(private readonly root: HTMLElement) {}
@@ -202,6 +206,17 @@ export class App {
       demo,
       ...(device ? { device } : {}),
       editor: new KeyEditor(client),
+      rgb: info.rgb
+        ? new RgbController(transport, info.rgb.initialMode, {
+            maxBrightness: info.rgb.info.maxBrightness,
+            onError: (error) => {
+              this.status(
+                'error',
+                t('rgb.error', { message: error instanceof Error ? error.message : String(error) }),
+              );
+            },
+          })
+        : undefined,
     };
     this.layer = 0;
     this.selected = undefined;
@@ -259,9 +274,63 @@ export class App {
     editStatus.setAttribute('aria-live', 'polite');
 
     const picker = this.createPicker(session);
-    workspace.append(toolbar, frame, details, editStatus, picker.element);
+    const keysSection = document.createElement('div');
+    keysSection.id = 'section-keys';
+    keysSection.append(toolbar, frame, details, editStatus, picker.element);
+    const rgbSection = document.createElement('div');
+    rgbSection.id = 'section-rgb';
+    rgbSection.append(this.rgbContent(session));
+
+    const nav = document.createElement('div');
+    nav.className = 'tabs sections';
+    nav.setAttribute('role', 'tablist');
+    nav.setAttribute('aria-label', t('view.label'));
+    const showSection = (): void => {
+      keysSection.hidden = this.section !== 'keys';
+      rgbSection.hidden = this.section !== 'rgb';
+      for (const tab of nav.children) {
+        tab.setAttribute('aria-selected', String((tab as HTMLElement).dataset.section === this.section));
+      }
+    };
+    for (const [id, label] of [
+      ['keys', t('view.keys')],
+      ['rgb', t('view.rgb')],
+    ] as const) {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.setAttribute('role', 'tab');
+      tab.dataset.section = id;
+      tab.textContent = label;
+      tab.addEventListener('click', () => {
+        this.section = id;
+        showSection();
+      });
+      nav.append(tab);
+    }
+    showSection();
+    workspace.append(nav, keysSection, rgbSection);
     this.view = { tabs, frame, details, editStatus, undo, redo, picker };
     this.refresh();
+  }
+
+  private rgbContent(session: Session): HTMLElement {
+    const { rgb, client, profile } = session;
+    const supported = client.info.rgb?.supportedEffects;
+    if (!rgb || !supported) {
+      const note = document.createElement('p');
+      note.className = 'status';
+      note.dataset.level = 'info';
+      note.textContent = t('rgb.unsupported');
+      return note;
+    }
+    return renderRgbPanel({
+      controller: rgb,
+      supportedEffects: supported,
+      ledmapLayers: (profile?.ledmapLayers ?? []).map((layer) => layerName(profile, layer)),
+      onError: (message) => {
+        this.status('error', message);
+      },
+    });
   }
 
   private createPicker(session: Session): KeycodePicker {

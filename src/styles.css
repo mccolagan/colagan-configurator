@@ -388,3 +388,68 @@ dialog.confirm h2 {
   margin: 0 0 8px;
   font-size: 1.1rem;
 }
+
+.tabs.sections {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rgb__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px 24px;
+}
+
+.rgb__field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.rgb__field > span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.rgb__field select {
+  grid-column: 1 / -1;
+}
+
+.rgb__field input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.rgb__field output {
+  min-width: 3ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.rgb__field--hue input[type='range'] {
+  accent-color: currentcolor;
+  height: 10px;
+  border-radius: 5px;
+  appearance: none;
+  background: linear-gradient(to right, red, yellow, lime, cyan, blue, magenta, red);
+}
+
+.rgb .actions {
+  align-items: center;
+  margin-top: 16px;
+}
+
+.rgb__swatch {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
+
+.rgb__note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
