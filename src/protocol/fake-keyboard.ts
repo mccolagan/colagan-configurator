@@ -1,5 +1,6 @@
 // Clavier Vial simulé en mémoire : sert aux tests unitaires, aux tests E2E et au mode démo.
 // Réponses calquées sur le Colagan V2 réel (relevées le 05/11/2026) : VIA 9, Vial 6, VialRGB 1, max 64.
+import { cie, LED_STREAM_COMMAND } from './led-stream';
 import { readU16be, readU16le, REPORT_SIZE, u16be, u16le, type Transport } from './packet';
 import { QSID_WIDTHS } from './qmk-settings';
 import { ViaCommand } from './via';
@@ -22,6 +23,42 @@ export interface FakeKeyboardOptions {
   readonly dynamicEntries?: number;
   /** Réglages QMK gérés (qsid -> valeur) ; par défaut ceux du Colagan V2. */
   readonly settings?: ReadonlyMap<number, number>;
+  /** Commande LED 0xC0 (firmware du 05/11/2026) ; false = ancien firmware. Défaut : true. */
+  readonly ledStream?: boolean;
+  /** Horloge (ms) des effets animés simulés ; défaut performance.now. */
+  readonly clock?: () => number;
+}
+
+/** LED -> [ligne, colonne] du Colagan V2 : chaîne linéaire, 6 colonnes, 5 pouces par moitié. */
+export function colaganLedPositions(): [number, number][] {
+  const positions: [number, number][] = [];
+  for (const offset of [0, 5]) {
+    for (let row = 0; row < 5; row++) {
+      for (let col = 0; col < (row === 4 ? 5 : 6); col++) positions.push([offset + row, col]);
+    }
+  }
+  return positions;
+}
+
+const LED_LEFT_COUNT = 29;
+
+/** HSV QMK (0-255) -> RGB, sans courbe : v est déjà la valeur PWM maximale. */
+function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
+  const region = Math.floor(h / 43) % 6;
+  const rem = (h - region * 43) * 6;
+  const p = (v * (255 - s)) >> 8;
+  const q = (v * (255 - ((s * rem) >> 8))) >> 8;
+  const t = (v * (255 - ((s * (255 - rem)) >> 8))) >> 8;
+  return (
+    [
+      [v, t, p],
+      [q, v, p],
+      [p, v, t],
+      [p, q, v],
+      [t, p, v],
+      [v, p, q],
+    ] as const
+  )[region] as [number, number, number];
 }
 
 /** Réglages QMK du Colagan V2 réel (qsid 8 non géré par le firmware). */
@@ -76,6 +113,9 @@ export class FakeKeyboard implements Transport {
   /** Simule les touches de déverrouillage tenues par l'utilisateur. */
   holdingUnlockKeys = false;
   inBootloader = false;
+  /** Simule un lien split coupé : les LED de la gauche (esclave) deviennent inconnues. */
+  remoteConnected = true;
+  readonly ledPositions = colaganLedPositions();
   /** Rapports reçus, pour les assertions des tests. */
   readonly sent: Uint8Array[] = [];
   private unlockInProgress = false;
@@ -173,10 +213,66 @@ export class FakeKeyboard implements Transport {
       case ViaCommand.vialPrefix:
         this.vial(msg);
         break;
+      case LED_STREAM_COMMAND:
+        if (this.options.ledStream === false) msg[0] = ViaCommand.unhandled;
+        else if (!this.unlockInProgress) this.ledStream(msg);
+        break;
       default:
         msg[0] = ViaCommand.unhandled;
     }
     return Promise.resolve(msg);
+  }
+
+  /** Couleur simulée d'une LED : éteinte, unie, ou arc-en-ciel animé pour les autres effets. */
+  ledColor(led: number): [number, number, number] {
+    const { effect, speed, hue, saturation, value } = this.rgb;
+    if (effect === 0) return [0, 0, 0];
+    const peak = cie(value);
+    if (effect === 2) return hsvToRgb(hue, saturation, peak);
+    const [, col = 0] = this.ledPositions[led] ?? [];
+    const x = led < LED_LEFT_COUNT ? col : 11 - col;
+    const time = (this.options.clock ?? (() => performance.now()))();
+    return hsvToRgb(Math.floor(hue + x * 20 + (time * (speed + 16)) / 200) & 0xff, saturation, peak);
+  }
+
+  /** Réponses de led_stream.c (droite maître). */
+  private ledStream(msg: Uint8Array): void {
+    const [, sub = 0, marker = 0, start = 0] = msg;
+    const count = this.ledPositions.length;
+    msg.fill(0, 2);
+    msg[3] = start;
+    if (marker !== 0xff) {
+      msg[2] = 0x03;
+      return;
+    }
+    if (sub === 0) {
+      const flags = 0x01 | (this.remoteConnected ? 0x02 : 0) | (this.rgb.effect ? 0x04 : 0);
+      msg.set(
+        [1, count, 9, 13, LED_LEFT_COUNT, 1, flags, this.options.maxBrightness ?? 64, this.rgb.value, 10, 6],
+        3,
+      );
+      return;
+    }
+    if (sub !== 1 && sub !== 2) {
+      msg[2] = 0x01;
+      return;
+    }
+    if (start >= count) {
+      msg[2] = 0x02;
+      return;
+    }
+    const n = Math.min(sub === 1 ? 13 : 9, count - start);
+    msg[4] = n;
+    for (let i = 0; i < n; i++) {
+      const led = start + i;
+      if (sub === 1) {
+        msg.set(this.ledPositions[led] ?? [0xff, 0xff], 5 + 2 * i);
+      } else if (led < LED_LEFT_COUNT && !this.remoteConnected) {
+        msg[2] = 0x10;
+      } else {
+        msg.set(this.ledColor(led), 5 + 3 * i);
+      }
+    }
   }
 
   /** Comme vial_keycode_firewall : QK_BOOT refusé tant que le clavier est verrouillé. */

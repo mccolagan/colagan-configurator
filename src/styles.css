@@ -205,7 +205,11 @@ svg.keyboard {
   outline: none;
 }
 
-.key:hover rect,
+.key--static {
+  cursor: default;
+}
+
+.key:not(.key--static):hover rect,
 .key:focus-visible rect {
   stroke: var(--accent);
   stroke-width: 2.5;
@@ -224,6 +228,39 @@ svg.keyboard {
   fill: color-mix(in srgb, var(--accent) 22%, var(--surface));
   stroke: var(--accent);
   stroke-width: 3;
+}
+
+/* Aperçu LED en direct (paintLeds) : calque coloré sous l'étiquette */
+.key rect.key__led {
+  fill: transparent;
+  stroke: none;
+  pointer-events: none;
+}
+
+.key rect.key__led[data-led='on'] {
+  fill-opacity: 0.6;
+}
+
+.key rect.key__led[data-led='off'] {
+  fill: var(--bg);
+}
+
+.key rect.key__led[data-led='unknown'] {
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+
+.led-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 0 0 8px;
+}
+
+.led-preview .status {
+  margin: 0;
 }
 
 .key-details {

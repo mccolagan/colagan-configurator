@@ -69,7 +69,8 @@ function addLabel(group: SVGGElement, label: KeyLabel, k: KeyGeometry): void {
 export interface KeyboardViewOptions {
   readonly keys: readonly KeyView[];
   readonly selected?: string;
-  readonly onSelect: (row: number, col: number) => void;
+  /** Absent : dessin en lecture seule (aperçu), touches non sélectionnables. */
+  readonly onSelect?: (row: number, col: number) => void;
 }
 
 export function renderKeyboard({ keys, selected, onSelect }: KeyboardViewOptions): SVGSVGElement {
@@ -90,13 +91,14 @@ export function renderKeyboard({ keys, selected, onSelect }: KeyboardViewOptions
     const k = view.geometry;
     const id = keyId(k.row, k.col);
     const group = svg('g', {
-      class: `key key--${view.kind}${id === selected ? ' key--selected' : ''}`,
+      class: `key key--${view.kind}${id === selected ? ' key--selected' : ''}${onSelect ? '' : ' key--static'}`,
       transform: `rotate(${String(k.r)} ${String(k.rx * UNIT)} ${String(k.ry * UNIT)})`,
-      tabindex: 0,
-      role: 'button',
-      'aria-pressed': id === selected ? 'true' : 'false',
+      ...(onSelect
+        ? { tabindex: 0, role: 'button', 'aria-pressed': id === selected ? 'true' : 'false' }
+        : {}),
       'aria-label': `${view.title} (${id})`,
-      'data-key': id,
+      // dessin d'aperçu : autre attribut, pour que [data-key] ne désigne que les touches éditables
+      [onSelect ? 'data-key' : 'data-preview-key']: id,
     });
     const title = svg('title', {});
     title.textContent = `${view.title}\n[${id}]`;
@@ -109,19 +111,44 @@ export function renderKeyboard({ keys, selected, onSelect }: KeyboardViewOptions
         height: k.h * UNIT - GAP,
         rx: 7,
       }),
+      // calque de l'aperçu LED (voir paintLeds), sous l'étiquette
+      svg('rect', {
+        class: 'key__led',
+        x: k.x * UNIT + GAP / 2 + 3,
+        y: k.y * UNIT + GAP / 2 + 3,
+        width: k.w * UNIT - GAP - 6,
+        height: k.h * UNIT - GAP - 6,
+        rx: 5,
+      }),
     );
     addLabel(group, view.label, k);
-    const select = (): void => {
-      onSelect(k.row, k.col);
-    };
-    group.addEventListener('click', select);
-    group.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        select();
-      }
-    });
+    if (onSelect) {
+      const select = (): void => {
+        onSelect(k.row, k.col);
+      };
+      group.addEventListener('click', select);
+      group.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          select();
+        }
+      });
+    }
     root.append(group);
   }
   return root;
+}
+
+/** Couleur d'aperçu par touche (clé keyId) ; une touche absente de la table perd son aperçu. */
+export function paintLeds(
+  root: Element,
+  paints: ReadonlyMap<string, { readonly kind: string; readonly css?: string }>,
+): void {
+  for (const led of root.querySelectorAll<SVGRectElement>('.key__led')) {
+    const group = led.parentElement;
+    const id = group?.dataset.key ?? group?.dataset.previewKey ?? '';
+    const paint = paints.get(id);
+    led.dataset.led = paint?.kind ?? '';
+    led.style.fill = paint?.kind === 'on' && paint.css ? paint.css : '';
+  }
 }

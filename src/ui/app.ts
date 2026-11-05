@@ -1,6 +1,7 @@
 import { createDemoKeyboard } from '../demo/demo-keyboard';
 import { detectHidSupport, type HidSupport } from '../env/support';
 import { readLabelLayout, saveLabelLayout } from '../env/label-layout';
+import { readLedPreview, saveLedPreview } from '../env/led-preview-pref';
 import { applyTheme, readTheme, type ThemeChoice } from '../env/theme';
 import { DynamicState } from '../editor/dynamic-state';
 import { trappedLayers } from '../editor/layer-guard';
@@ -11,11 +12,12 @@ import { flatLabel, keyLabel, type LabelLayout } from '../keycodes/labels';
 import { parseKle, type KeyGeometry } from '../keyboard/kle';
 import { layerName, profileFor, type KeyboardProfile } from '../profiles';
 import { KeyboardClient } from '../protocol/client';
+import { LedPreview, type LedPaints, type PreviewState } from '../rgb/led-preview';
 import { RgbController } from '../rgb/rgb-controller';
 import type { Transport } from '../protocol/packet';
 import { HidTransport } from '../transport/hid-transport';
 import { confirmDialog } from './confirm';
-import { keyId, renderKeyboard, type KeyView } from './keyboard-view';
+import { keyId, paintLeds, renderKeyboard, type KeyView } from './keyboard-view';
 import { KeycodePicker, RISKY_KEYCODES } from './keycode-picker';
 import { renderBackupPanel } from './backup-panel';
 import { DynamicPanel } from './dynamic-panel';
@@ -40,6 +42,8 @@ interface Session {
   readonly device?: HIDDevice;
   readonly editor: KeyEditor;
   readonly rgb: RgbController | undefined;
+  /** Couleurs réelles des LED (commande firmware 0xC0), lues tant qu'un dessin est visible. */
+  readonly preview: LedPreview;
   /** Macros, tap-dance et combos : lus à la première ouverture de l'onglet « Macros & co ». */
   dynamic: DynamicState | undefined;
 }
@@ -47,6 +51,9 @@ interface Session {
 interface WorkspaceView {
   readonly tabs: HTMLElement;
   readonly frame: HTMLElement;
+  /** Dessin en lecture seule de l'onglet RGB, pour l'aperçu des effets. */
+  readonly rgbFrame: HTMLElement;
+  readonly ledStatus: HTMLElement;
   readonly details: HTMLElement;
   readonly editStatus: HTMLElement;
   readonly undo: HTMLButtonElement;
@@ -64,6 +71,8 @@ export class App {
   private view: WorkspaceView | undefined;
   private section: 'keys' | 'rgb' | 'dynamic' | 'backup' = 'keys';
   private dynamicPanel: DynamicPanel | undefined;
+  private ledEnabled = readLedPreview();
+  private ledState: { state: PreviewState; detail?: string } = { state: 'idle' };
   private readonly support = detectHidSupport(window);
 
   constructor(private readonly root: HTMLElement) {}
@@ -77,6 +86,7 @@ export class App {
     if (this.support === 'ok') {
       navigator.hid.addEventListener('disconnect', (event) => {
         if (this.session?.device === event.device) {
+          this.session.preview.stop();
           this.session = undefined;
           this.renderWorkspace();
           this.status('warn', t('connect.disconnected'));
@@ -206,6 +216,17 @@ export class App {
       customKeycodes: info.definition.customKeycodes ?? [],
     });
     const keys = parseKle(info.definition.layouts.keymap);
+    this.session?.preview.stop();
+    const preview = new LedPreview(transport, {
+      onFrame: (paints) => {
+        this.paintPreview(paints);
+      },
+      onState: (state, detail) => {
+        this.ledState = { state, ...(detail ? { detail } : {}) };
+        this.showLedState();
+      },
+    });
+    this.ledState = { state: 'idle' };
     this.session = {
       client,
       catalog,
@@ -225,6 +246,7 @@ export class App {
             },
           })
         : undefined,
+      preview,
       dynamic: undefined,
     };
     this.dynamicPanel = undefined;
@@ -288,7 +310,12 @@ export class App {
     dynamicSection.id = 'section-dynamic';
     const rgbSection = document.createElement('div');
     rgbSection.id = 'section-rgb';
-    rgbSection.append(this.rgbContent(session));
+    const rgbFrame = document.createElement('div');
+    rgbFrame.className = 'keyboard-frame';
+    rgbFrame.id = 'rgb-keyboard';
+    rgbFrame.setAttribute('aria-label', t('led.previewLabel'));
+    rgbSection.append(this.rgbContent(session), rgbFrame);
+    const ledBar = this.ledBar();
     const backupSection = document.createElement('div');
     backupSection.id = 'section-backup';
     backupSection.append(
@@ -318,6 +345,8 @@ export class App {
       rgbSection.hidden = this.section !== 'rgb';
       backupSection.hidden = this.section !== 'backup';
       dynamicSection.hidden = this.section !== 'dynamic';
+      ledBar.element.hidden = this.section !== 'keys' && this.section !== 'rgb';
+      this.updatePreview();
       if (this.section === 'dynamic' && !dynamicSection.hasChildNodes())
         void this.loadDynamic(dynamicSection);
       for (const tab of nav.children) {
@@ -345,9 +374,75 @@ export class App {
     const toolbar = document.createElement('div');
     toolbar.className = 'toolbar';
     toolbar.append(nav, history);
-    workspace.append(toolbar, editStatus, keysSection, rgbSection, dynamicSection, backupSection);
-    this.view = { tabs, frame, details, editStatus, undo, redo, picker };
+    workspace.append(
+      toolbar,
+      editStatus,
+      ledBar.element,
+      keysSection,
+      rgbSection,
+      dynamicSection,
+      backupSection,
+    );
+    this.view = { tabs, frame, rgbFrame, ledStatus: ledBar.status, details, editStatus, undo, redo, picker };
+    this.showLedState();
     this.refresh();
+  }
+
+  /** Case « Éclairage réel » et état de l'aperçu, communs aux onglets Touches et RGB. */
+  private ledBar(): { element: HTMLElement; status: HTMLElement } {
+    const element = document.createElement('div');
+    element.className = 'led-preview';
+    const label = document.createElement('label');
+    label.title = t('led.hint');
+    const toggle = document.createElement('input');
+    toggle.type = 'checkbox';
+    toggle.id = 'led-preview';
+    toggle.checked = this.ledEnabled;
+    toggle.addEventListener('change', () => {
+      this.ledEnabled = toggle.checked;
+      saveLedPreview(this.ledEnabled);
+      this.updatePreview();
+    });
+    label.append(toggle, ` ${t('led.toggle')}`);
+    const status = document.createElement('p');
+    status.className = 'status';
+    status.id = 'led-status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    element.append(label, status);
+    return { element, status };
+  }
+
+  private updatePreview(): void {
+    const preview = this.session?.preview;
+    if (!preview) return;
+    const visible = this.section === 'keys' || this.section === 'rgb';
+    if (this.ledEnabled && visible) preview.start();
+    else if (preview.active) preview.stop();
+  }
+
+  private paintPreview(paints: LedPaints): void {
+    if (!this.view) return;
+    paintLeds(this.view.frame, paints);
+    paintLeds(this.view.rgbFrame, paints);
+  }
+
+  private showLedState(): void {
+    const el = this.view?.ledStatus;
+    if (!el) return;
+    const { state, detail } = this.ledState;
+    const messages: Record<PreviewState, [Level, string]> = {
+      idle: ['info', this.ledEnabled ? '' : t('led.idle')],
+      running: ['ok', t('led.running')],
+      partial: ['warn', t('led.partial')],
+      busy: ['info', t('led.busy')],
+      unsupported: ['info', t('led.unsupported')],
+      error: ['error', t('led.error', { message: detail ?? '?' })],
+    };
+    const [level, message] = messages[state];
+    el.dataset.level = level;
+    el.textContent = message;
+    el.hidden = message === '';
   }
 
   /** Écritures dynamiques de l'historique, déléguées à l'état chargé (refusées tant qu'il ne l'est pas). */
@@ -478,6 +573,7 @@ export class App {
       };
     });
     const selected = this.selected ? keyId(this.selected.row, this.selected.col) : undefined;
+    view.rgbFrame.replaceChildren(renderKeyboard({ keys: views }));
     view.frame.replaceChildren(
       renderKeyboard({
         keys: views,
@@ -485,10 +581,11 @@ export class App {
         onSelect: (row, col) => {
           this.selected = { row, col };
           this.refresh();
-          this.root.querySelector<SVGGElement>(`[data-key="${keyId(row, col)}"]`)?.focus();
+          view.frame.querySelector<SVGGElement>(`[data-key="${keyId(row, col)}"]`)?.focus();
         },
       }),
     );
+    this.paintPreview(session.preview.current);
 
     if (this.selected) {
       const code = client.getKey(this.layer, this.selected.row, this.selected.col);

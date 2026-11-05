@@ -274,9 +274,12 @@ Ouvrir le serveur Docker via l'IP du LAN (`http://192.168.x.x:5173`) **désactiv
 - **Ports clavier de KVM** : le clavier composite peut y être mal reconnu (diagnostic déjà rencontré).
 
 ## 9. Préparer les étapes 2 et 3 (sans les implémenter)
-- [ ] `protocol/` extensible par « commandes clavier personnalisées » (canal `id_custom_*` / commande dédiée).
+- [x] `protocol/` extensible par « commandes clavier personnalisées » (canal `id_custom_*` / commande dédiée) :
+  `protocol/led-stream.ts` (commande `0xC0`).
 - [ ] Modèle RGB prévu pour des couleurs **par couche et par LED** (58 × 8) et une source « état réel ».
-- [ ] Rendu SVG capable d'afficher une couleur par touche à ~20 images/s sans recréer le DOM.
+- [x] Rendu SVG capable d'afficher une couleur par touche à ~20 images/s sans recréer le DOM (`paintLeds`).
+- [x] **Étape 3 faite** : aperçu « Éclairage réel » (`rgb/led-preview.ts`) d'après
+  `colagan-pico-split-keyboard/docs/led-stream-protocol.md` ; onglets Touches et RGB, mode démo simulé.
 
 ## 10. Livrables de l'étape 1
 - [ ] Dépôt `colagan-configurator` initialisé (Vite + TS, lint, tests, CI, Pages).
