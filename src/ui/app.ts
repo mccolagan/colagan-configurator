@@ -1,18 +1,26 @@
 import { createDemoKeyboard } from '../demo/demo-keyboard';
 import { detectHidSupport, type HidSupport } from '../env/support';
 import { readLabelLayout, saveLabelLayout } from '../env/label-layout';
-import { readLedPreview, saveLedPreview } from '../env/led-preview-pref';
+import { readLedDisplay, saveLedDisplay, type LedDisplay } from '../env/led-preview-pref';
 import { applyTheme, readTheme, type ThemeChoice } from '../env/theme';
 import { DynamicState } from '../editor/dynamic-state';
 import { trappedLayers } from '../editor/layer-guard';
-import { KeyEditor, type Change, type DynamicStore, type KeyChange } from '../editor/key-editor';
+import {
+  KeyEditor,
+  type Change,
+  type DynamicStore,
+  type KeyChange,
+  type LedStore,
+} from '../editor/key-editor';
 import { t, type MessageKey } from '../i18n';
 import { KeycodeCatalog } from '../keycodes/catalog';
 import { flatLabel, keyLabel, type LabelLayout } from '../keycodes/labels';
 import { parseKle, type KeyGeometry } from '../keyboard/kle';
 import { layerName, profileFor, type KeyboardProfile } from '../profiles';
 import { KeyboardClient } from '../protocol/client';
-import { LedPreview, type LedPaints, type PreviewState } from '../rgb/led-preview';
+import { LayerLighting } from '../rgb/layer-lighting';
+import { LedPreview, type LedPaint, type LedPaints, type PreviewState } from '../rgb/led-preview';
+import type { LayerColor } from '../protocol/led-stream';
 import { RgbController } from '../rgb/rgb-controller';
 import type { Transport } from '../protocol/packet';
 import { HidTransport } from '../transport/hid-transport';
@@ -22,6 +30,7 @@ import { KeycodePicker, RISKY_KEYCODES } from './keycode-picker';
 import { renderBackupPanel } from './backup-panel';
 import { DynamicPanel } from './dynamic-panel';
 import { renderRgbPanel } from './rgb-panel';
+import { cssColor, renderColorPanel } from './color-panel';
 import { unlockKeyboard } from './unlock-dialog';
 
 // Interface raw HID de VIA / Vial
@@ -44,6 +53,9 @@ interface Session {
   readonly rgb: RgbController | undefined;
   /** Couleurs réelles des LED (commande firmware 0xC0), lues tant qu'un dessin est visible. */
   readonly preview: LedPreview;
+  /** Couleurs et effet par couche : undefined = pas encore lus, null = non gérés par le firmware. */
+  lighting: LayerLighting | null | undefined;
+  lightingLoad: Promise<void> | undefined;
   /** Macros, tap-dance et combos : lus à la première ouverture de l'onglet « Macros & co ». */
   dynamic: DynamicState | undefined;
 }
@@ -51,9 +63,10 @@ interface Session {
 interface WorkspaceView {
   readonly tabs: HTMLElement;
   readonly frame: HTMLElement;
-  /** Dessin en lecture seule de l'onglet RGB, pour l'aperçu des effets. */
-  readonly rgbFrame: HTMLElement;
   readonly ledStatus: HTMLElement;
+  /** Mode Couleurs : pinceau et effet de la couche (à la place du choix de keycode). */
+  readonly colorBox: HTMLElement;
+  readonly modeButtons: HTMLElement;
   readonly details: HTMLElement;
   readonly editStatus: HTMLElement;
   readonly undo: HTMLButtonElement;
@@ -69,9 +82,17 @@ export class App {
   private selected: { row: number; col: number } | undefined;
   private layout: LabelLayout = readLabelLayout();
   private view: WorkspaceView | undefined;
-  private section: 'keys' | 'rgb' | 'dynamic' | 'backup' = 'keys';
+  private section: 'keys' | 'dynamic' | 'backup' = 'keys';
+  private mode: 'keys' | 'colors' = 'keys';
+  private brush: LayerColor = [255, 0, 0];
+  /** Glisser en cours en mode Couleurs : LED peintes (aperçu local) et leurs valeurs d'avant. */
+  private drag:
+    { layer: number; after: Map<number, LayerColor>; before: Map<number, LayerColor> } | undefined;
+  private livePaints: LedPaints = new Map();
+  private keyboardLayer: number | undefined;
+  private colorPanelKey = '';
   private dynamicPanel: DynamicPanel | undefined;
-  private ledEnabled = readLedPreview();
+  private ledDisplay: LedDisplay = readLedDisplay();
   private ledState: { state: PreviewState; detail?: string } = { state: 'idle' };
   private readonly support = detectHidSupport(window);
 
@@ -219,7 +240,19 @@ export class App {
     this.session?.preview.stop();
     const preview = new LedPreview(transport, {
       onFrame: (paints) => {
-        this.paintPreview(paints);
+        this.livePaints = paints;
+        this.paintPreview();
+      },
+      // le clavier affiche la couche éditée : en mode Couleurs, ou quand le dessin montre la couche
+      previewLayer: () =>
+        this.section === 'keys' && (this.mode === 'colors' || this.ledDisplay === 'layer')
+          ? this.layer
+          : null,
+      onInfo: (ledInfo) => {
+        if (ledInfo.activeLayer !== this.keyboardLayer) {
+          this.keyboardLayer = ledInfo.activeLayer;
+          this.markActiveTab();
+        }
       },
       onState: (state, detail) => {
         this.ledState = { state, ...(detail ? { detail } : {}) };
@@ -227,6 +260,9 @@ export class App {
       },
     });
     this.ledState = { state: 'idle' };
+    this.livePaints = new Map();
+    this.keyboardLayer = undefined;
+    this.colorPanelKey = '';
     this.session = {
       client,
       catalog,
@@ -234,7 +270,7 @@ export class App {
       profile: profileFor(info.uid),
       demo,
       ...(device ? { device } : {}),
-      editor: new KeyEditor(client, this.dynamicStore()),
+      editor: new KeyEditor(client, this.dynamicStore(), this.ledStore()),
       rgb: info.rgb
         ? new RgbController(transport, info.rgb.initialMode, {
             maxBrightness: info.rgb.info.maxBrightness,
@@ -247,6 +283,8 @@ export class App {
           })
         : undefined,
       preview,
+      lighting: undefined,
+      lightingLoad: undefined,
       dynamic: undefined,
     };
     this.dynamicPanel = undefined;
@@ -303,19 +341,18 @@ export class App {
     editStatus.setAttribute('aria-live', 'polite');
 
     const picker = this.createPicker(session);
+    const colorBox = document.createElement('div');
+    colorBox.id = 'color-box';
+    const modeButtons = this.modeSwitch();
+    const ledBar = this.ledBar();
     const keysSection = document.createElement('div');
     keysSection.id = 'section-keys';
-    keysSection.append(tabs, frame, details, picker.element);
+    const header = document.createElement('div');
+    header.className = 'keys-header';
+    header.append(modeButtons, ledBar.element);
+    keysSection.append(tabs, header, frame, details, picker.element, colorBox);
     const dynamicSection = document.createElement('div');
     dynamicSection.id = 'section-dynamic';
-    const rgbSection = document.createElement('div');
-    rgbSection.id = 'section-rgb';
-    const rgbFrame = document.createElement('div');
-    rgbFrame.className = 'keyboard-frame';
-    rgbFrame.id = 'rgb-keyboard';
-    rgbFrame.setAttribute('aria-label', t('led.previewLabel'));
-    rgbSection.append(this.rgbContent(session), rgbFrame);
-    const ledBar = this.ledBar();
     const backupSection = document.createElement('div');
     backupSection.id = 'section-backup';
     backupSection.append(
@@ -342,10 +379,8 @@ export class App {
     nav.setAttribute('aria-label', t('view.label'));
     const showSection = (): void => {
       keysSection.hidden = this.section !== 'keys';
-      rgbSection.hidden = this.section !== 'rgb';
       backupSection.hidden = this.section !== 'backup';
       dynamicSection.hidden = this.section !== 'dynamic';
-      ledBar.element.hidden = this.section !== 'keys' && this.section !== 'rgb';
       this.updatePreview();
       if (this.section === 'dynamic' && !dynamicSection.hasChildNodes())
         void this.loadDynamic(dynamicSection);
@@ -355,7 +390,6 @@ export class App {
     };
     for (const [id, label] of [
       ['keys', t('view.keys')],
-      ['rgb', t('view.rgb')],
       ['dynamic', t('view.dynamic')],
       ['backup', t('view.backup')],
     ] as const) {
@@ -374,57 +408,267 @@ export class App {
     const toolbar = document.createElement('div');
     toolbar.className = 'toolbar';
     toolbar.append(nav, history);
-    workspace.append(
-      toolbar,
+    workspace.append(toolbar, editStatus, keysSection, dynamicSection, backupSection);
+    this.view = {
+      tabs,
+      frame,
+      ledStatus: ledBar.status,
+      colorBox,
+      modeButtons,
+      details,
       editStatus,
-      ledBar.element,
-      keysSection,
-      rgbSection,
-      dynamicSection,
-      backupSection,
-    );
-    this.view = { tabs, frame, rgbFrame, ledStatus: ledBar.status, details, editStatus, undo, redo, picker };
+      undo,
+      redo,
+      picker,
+    };
     this.showLedState();
     this.refresh();
   }
 
-  /** Case « Éclairage réel » et état de l'aperçu, communs aux onglets Touches et RGB. */
+  /** Boutons à choix unique (rôle radio) ; renvoie le conteneur. */
+  private segmented<T extends string>(
+    label: string,
+    id: string,
+    options: readonly (readonly [T, string, string?])[],
+    current: T,
+    onChange: (value: T) => void,
+  ): HTMLElement {
+    const group = document.createElement('div');
+    group.className = 'segmented';
+    group.id = id;
+    group.setAttribute('role', 'radiogroup');
+    group.setAttribute('aria-label', label);
+    const caption = document.createElement('span');
+    caption.className = 'segmented__label';
+    caption.textContent = label;
+    group.append(caption);
+    for (const [value, text, title] of options) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', String(value === current));
+      button.dataset.value = value;
+      button.textContent = text;
+      if (title) button.title = title;
+      button.addEventListener('click', () => {
+        for (const other of group.querySelectorAll('button')) {
+          other.setAttribute('aria-checked', String(other === button));
+        }
+        onChange(value);
+      });
+      group.append(button);
+    }
+    return group;
+  }
+
+  private modeSwitch(): HTMLElement {
+    return this.segmented<'keys' | 'colors'>(
+      t('mode.label'),
+      'edit-mode',
+      [
+        ['keys', t('mode.keys')],
+        ['colors', t('mode.colors')],
+      ],
+      this.mode,
+      (mode) => {
+        this.mode = mode;
+        this.updatePreview();
+        this.refresh();
+      },
+    );
+  }
+
+  /** Choix de l'éclairage affiché sur le dessin, et état de l'aperçu. */
   private ledBar(): { element: HTMLElement; status: HTMLElement } {
     const element = document.createElement('div');
     element.className = 'led-preview';
-    const label = document.createElement('label');
-    label.title = t('led.hint');
-    const toggle = document.createElement('input');
-    toggle.type = 'checkbox';
-    toggle.id = 'led-preview';
-    toggle.checked = this.ledEnabled;
-    toggle.addEventListener('change', () => {
-      this.ledEnabled = toggle.checked;
-      saveLedPreview(this.ledEnabled);
-      this.updatePreview();
-    });
-    label.append(toggle, ` ${t('led.toggle')}`);
+    const display = this.segmented<LedDisplay>(
+      t('led.display'),
+      'led-display',
+      [
+        ['off', t('led.off')],
+        ['layer', t('led.layer'), t('led.layerHint')],
+        ['live', t('led.live'), t('led.liveHint')],
+      ],
+      this.ledDisplay,
+      (value) => {
+        this.ledDisplay = value;
+        saveLedDisplay(value);
+        this.updatePreview();
+        this.showLedState();
+        this.paintPreview();
+      },
+    );
     const status = document.createElement('p');
     status.className = 'status';
     status.id = 'led-status';
     status.setAttribute('role', 'status');
     status.setAttribute('aria-live', 'polite');
-    element.append(label, status);
+    element.append(display, status);
     return { element, status };
   }
 
-  private updatePreview(): void {
-    const preview = this.session?.preview;
-    if (!preview) return;
-    const visible = this.section === 'keys' || this.section === 'rgb';
-    if (this.ledEnabled && visible) preview.start();
-    else if (preview.active) preview.stop();
+  /** Lecture paresseuse des couleurs par couche (mode Couleurs ou affichage de la couche). */
+  private ensureLighting(): void {
+    const session = this.session;
+    if (!session || session.lighting !== undefined || session.lightingLoad) return;
+    session.lightingLoad = LayerLighting.load(session.client.transport)
+      .then((lighting) => {
+        session.lighting = lighting ?? null;
+      })
+      .catch((error: unknown) => {
+        session.lighting = null;
+        this.editStatus(
+          'error',
+          t('colors.loadError', { message: error instanceof Error ? error.message : String(error) }),
+        );
+      })
+      .finally(() => {
+        session.lightingLoad = undefined;
+        if (this.session === session) this.refresh();
+      });
   }
 
-  private paintPreview(paints: LedPaints): void {
-    if (!this.view) return;
-    paintLeds(this.view.frame, paints);
-    paintLeds(this.view.rgbFrame, paints);
+  private updatePreview(): void {
+    const session = this.session;
+    if (!session) return;
+    const wantsLayer = this.mode === 'colors' || this.ledDisplay === 'layer';
+    if (this.section === 'keys' && wantsLayer) this.ensureLighting();
+    const run = this.section === 'keys' && (this.ledDisplay !== 'off' || this.mode === 'colors');
+    if (run) session.preview.start();
+    else if (session.preview.active) session.preview.stop();
+  }
+
+  /**
+   * Couleur de chaque touche sur le dessin : couleurs enregistrées de la couche (exactes) quand on montre la
+   * couche ; l'état réel du clavier pour les touches transparentes et en mode « Clavier en direct ».
+   */
+  private paintPreview(): void {
+    const session = this.session;
+    const view = this.view;
+    if (!session || !view) return;
+    const lighting = session.lighting;
+    const showLayer = Boolean(lighting) && (this.mode === 'colors' || this.ledDisplay === 'layer');
+    const showLive = this.ledDisplay !== 'off';
+    if (!showLayer) {
+      paintLeds(view.frame, showLive ? this.livePaints : new Map());
+      return;
+    }
+    const paints = new Map<string, LedPaint>();
+    for (const k of session.keys) {
+      const id = keyId(k.row, k.col);
+      const color = lighting?.color(this.layer, k.row, k.col);
+      if (color === undefined) continue;
+      if (color === null) {
+        const live = showLive ? this.livePaints.get(id) : undefined;
+        paints.set(id, live ?? { kind: 'effect' });
+      } else if (color[0] || color[1] || color[2]) {
+        paints.set(id, { kind: 'on', css: cssColor(color) });
+      } else {
+        paints.set(id, { kind: 'off' });
+      }
+    }
+    paintLeds(view.frame, paints);
+  }
+
+  private markActiveTab(): void {
+    const tabs = this.view?.tabs;
+    if (!tabs) return;
+    [...tabs.children].forEach((tab, layer) => {
+      const active = layer === this.keyboardLayer;
+      tab.classList.toggle('tab--keyboard', active);
+      if (active) tab.setAttribute('title', t('led.activeTab'));
+      else tab.removeAttribute('title');
+    });
+  }
+
+  /** Écrit des LED d'une couche avec historique ; `before` = valeurs à rétablir par Annuler. */
+  private async commitColors(
+    layer: number,
+    after: ReadonlyMap<number, LayerColor>,
+    before: ReadonlyMap<number, LayerColor>,
+  ): Promise<void> {
+    const session = this.session;
+    if (!session?.lighting || !after.size) return;
+    try {
+      const written = await session.editor.change({ kind: 'leds', layer, before, after });
+      if (written) {
+        this.editStatus(
+          'ok',
+          t('colors.written', { count: after.size, layer: layerName(session.profile, layer) }),
+        );
+      }
+    } catch (error) {
+      session.lighting.stage(layer, before);
+      this.editStatus(
+        'error',
+        t('colors.error', { message: error instanceof Error ? error.message : String(error) }),
+      );
+    }
+    this.refresh();
+  }
+
+  /** Clic (ou Entrée) en mode Couleurs : peint la touche, ou reprend sa couleur avec Alt. */
+  private paintKey(row: number, col: number, event: MouseEvent | KeyboardEvent): void {
+    const lighting = this.session?.lighting;
+    if (!lighting) return;
+    const led = lighting.led(row, col);
+    if (led === undefined) return;
+    if (event.altKey) {
+      this.brush = lighting.colorOfLed(this.layer, led);
+      this.colorPanelKey = '';
+      this.editStatus('info', t('colors.picked', { position: keyId(row, col) }));
+      this.refresh();
+      return;
+    }
+    const after = new Map([[led, this.brush]]);
+    const before = lighting.stage(this.layer, after);
+    void this.commitColors(this.layer, after, before);
+  }
+
+  /** Glisser sur plusieurs touches : aperçu local, une seule écriture (et une entrée d'historique) au relâché. */
+  private attachPaintDrag(svg: SVGSVGElement): void {
+    const keyAt = (target: EventTarget | null): [number, number] | undefined => {
+      const id = (target instanceof Element ? target.closest<SVGGElement>('[data-key]') : null)?.dataset.key;
+      if (!id) return undefined;
+      const [row = 0, col = 0] = id.split(',').map(Number);
+      return [row, col];
+    };
+    const add = (target: EventTarget | null): void => {
+      const lighting = this.session?.lighting;
+      const drag = this.drag;
+      const key = keyAt(target);
+      if (!lighting || !drag || !key) return;
+      const led = lighting.led(key[0], key[1]);
+      if (led === undefined || drag.after.has(led)) return;
+      drag.after.set(led, this.brush);
+      const previous = lighting.stage(drag.layer, new Map([[led, this.brush]])).get(led) ?? null;
+      drag.before.set(led, previous);
+      this.paintPreview();
+    };
+    svg.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || event.altKey || !this.session?.lighting) return;
+      this.drag = { layer: this.layer, after: new Map(), before: new Map() };
+      add(event.target);
+    });
+    svg.addEventListener('pointerover', (event) => {
+      if (this.drag && event.buttons & 1) add(event.target);
+    });
+    const end = (): void => {
+      const drag = this.drag;
+      this.drag = undefined;
+      if (!drag) return;
+      // une seule touche : c'est le clic qui suit qui l'écrit (paintKey) ; on retire l'aperçu local
+      if (drag.after.size <= 1) {
+        this.session?.lighting?.stage(drag.layer, drag.before);
+        return;
+      }
+      void this.commitColors(drag.layer, drag.after, drag.before);
+    };
+    svg.addEventListener('pointerup', end);
+    svg.addEventListener('pointerleave', (event) => {
+      if (!(event.buttons & 1)) end();
+    });
   }
 
   private showLedState(): void {
@@ -432,7 +676,7 @@ export class App {
     if (!el) return;
     const { state, detail } = this.ledState;
     const messages: Record<PreviewState, [Level, string]> = {
-      idle: ['info', this.ledEnabled ? '' : t('led.idle')],
+      idle: ['info', this.ledDisplay === 'off' ? t('led.idle') : ''],
       running: ['ok', t('led.running')],
       partial: ['warn', t('led.partial')],
       busy: ['info', t('led.busy')],
@@ -456,6 +700,16 @@ export class App {
       setTapDance: (index, entry) => state().setTapDance(index, entry),
       setCombo: (index, entry) => state().setCombo(index, entry),
       setMacros: (buffer) => state().setMacros(buffer),
+    };
+  }
+
+  private ledStore(): LedStore {
+    return {
+      setLedColors: async (layer, colors) => {
+        const lighting = this.session?.lighting;
+        if (!lighting) throw new Error('couleurs par couche non chargées');
+        await lighting.write(layer, colors);
+      },
     };
   }
 
@@ -504,7 +758,7 @@ export class App {
   }
 
   private rgbContent(session: Session): HTMLElement {
-    const { rgb, client, profile } = session;
+    const { rgb, client } = session;
     const supported = client.info.rgb?.supportedEffects;
     if (!rgb || !supported) {
       const note = document.createElement('p');
@@ -516,7 +770,7 @@ export class App {
     return renderRgbPanel({
       controller: rgb,
       supportedEffects: supported,
-      ledmapLayers: (profile?.ledmapLayers ?? []).map((layer) => layerName(profile, layer)),
+      ledmapLayers: [],
       onError: (message) => {
         this.status('error', message);
       },
@@ -562,6 +816,10 @@ export class App {
         return tab;
       }),
     );
+    this.markActiveTab();
+    for (const button of view.modeButtons.querySelectorAll('button')) {
+      button.setAttribute('aria-checked', String(button.dataset.value === this.mode));
+    }
 
     const views: KeyView[] = keys.map((geometry) => {
       const code = client.getKey(this.layer, geometry.row, geometry.col);
@@ -573,19 +831,26 @@ export class App {
       };
     });
     const selected = this.selected ? keyId(this.selected.row, this.selected.col) : undefined;
-    view.rgbFrame.replaceChildren(renderKeyboard({ keys: views }));
-    view.frame.replaceChildren(
-      renderKeyboard({
-        keys: views,
-        ...(selected ? { selected } : {}),
-        onSelect: (row, col) => {
-          this.selected = { row, col };
-          this.refresh();
-          view.frame.querySelector<SVGGElement>(`[data-key="${keyId(row, col)}"]`)?.focus();
-        },
-      }),
-    );
-    this.paintPreview(session.preview.current);
+    const keyboard = renderKeyboard({
+      keys: views,
+      ...(selected && this.mode === 'keys' ? { selected } : {}),
+      onSelect: (row, col, event) => {
+        if (this.mode === 'colors') {
+          this.paintKey(row, col, event);
+          return;
+        }
+        this.selected = { row, col };
+        this.refresh();
+        view.frame.querySelector<SVGGElement>(`[data-key="${keyId(row, col)}"]`)?.focus();
+      },
+    });
+    if (this.mode === 'colors') {
+      keyboard.classList.add('keyboard--paint');
+      this.attachPaintDrag(keyboard);
+    }
+    view.frame.replaceChildren(keyboard);
+    this.paintPreview();
+    this.renderColorBox(session, view);
 
     if (this.selected) {
       const code = client.getKey(this.layer, this.selected.row, this.selected.col);
@@ -600,6 +865,72 @@ export class App {
     view.undo.disabled = !editor.canUndo;
     view.redo.disabled = !editor.canRedo;
     view.picker.setEnabled(Boolean(this.selected));
+    view.picker.element.hidden = this.mode === 'colors';
+    view.details.hidden = this.mode === 'colors';
+  }
+
+  /** Panneau du mode Couleurs, reconstruit seulement quand la couche ou l'état de chargement change. */
+  private renderColorBox(session: Session, view: WorkspaceView): void {
+    view.colorBox.hidden = this.mode !== 'colors';
+    if (this.mode !== 'colors') {
+      this.colorPanelKey = '';
+      return;
+    }
+    const state = session.lighting === undefined ? 'loading' : session.lighting ? 'ready' : 'none';
+    const key = `${String(this.layer)}:${state}`;
+    if (key === this.colorPanelKey) return;
+    this.colorPanelKey = key;
+    if (state === 'loading') {
+      const loading = document.createElement('p');
+      loading.className = 'status';
+      loading.dataset.level = 'info';
+      loading.textContent = t('colors.loading');
+      view.colorBox.replaceChildren(loading);
+      return;
+    }
+    const name = layerName(session.profile, this.layer);
+    view.colorBox.replaceChildren(
+      renderColorPanel({
+        lighting: session.lighting ?? undefined,
+        layer: this.layer,
+        layerName: name,
+        brush: this.brush,
+        onBrush: (brush) => {
+          this.brush = brush;
+        },
+        globalRgb: () => this.rgbContent(session),
+        globalMode: () => ({
+          ...(session.rgb?.mode ?? { effect: 0, speed: 0, hue: 0, saturation: 0, value: 0 }),
+        }),
+        supportedEffects: session.client.info.rgb?.supportedEffects ?? [],
+        maxBrightness: session.client.info.rgb?.info.maxBrightness ?? 255,
+        onReset: () => void this.resetColors(name),
+        onError: (message) => {
+          this.editStatus('error', message);
+        },
+      }),
+    );
+  }
+
+  private async resetColors(name: string): Promise<void> {
+    const lighting = this.session?.lighting;
+    if (!lighting) return;
+    const layer = this.layer;
+    const ok = await confirmDialog(t('colors.resetTitle', { layer: name }), t('colors.resetBody'), {
+      confirmLabel: t('colors.resetConfirm'),
+    });
+    if (!ok) return;
+    try {
+      await lighting.reset(layer);
+      this.editStatus('ok', t('colors.resetDone', { layer: name }));
+    } catch (error) {
+      this.editStatus(
+        'error',
+        t('colors.error', { message: error instanceof Error ? error.message : String(error) }),
+      );
+    }
+    this.colorPanelKey = '';
+    this.refresh();
   }
 
   private editStatus(level: Level, message: string): void {
@@ -691,6 +1022,15 @@ export class App {
           'info',
           t(direction === 'undo' ? 'edit.undone' : 'edit.redone', this.describe(change, code)),
         );
+      } else if (change?.kind === 'leds') {
+        this.layer = change.layer;
+        this.colorPanelKey = '';
+        this.editStatus(
+          'info',
+          t(direction === 'undo' ? 'edit.undoneEntry' : 'edit.redoneEntry', {
+            name: t('colors.entryName', { layer: layerName(session.profile, change.layer) }),
+          }),
+        );
       } else if (change) {
         this.editStatus(
           'info',
@@ -707,7 +1047,7 @@ export class App {
     this.refresh();
   }
 
-  private entryName(change: Exclude<Change, KeyChange>): string {
+  private entryName(change: Exclude<Change, KeyChange | { kind: 'leds' }>): string {
     if (change.kind === 'tapDance') return `TD(${String(change.index)})`;
     if (change.kind === 'combo') return t('dyn.comboName', { n: change.index });
     return `M${String(change.index)}`;

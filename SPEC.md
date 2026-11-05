@@ -276,7 +276,11 @@ Ouvrir le serveur Docker via l'IP du LAN (`http://192.168.x.x:5173`) **désactiv
 ## 9. Préparer les étapes 2 et 3 (sans les implémenter)
 - [x] `protocol/` extensible par « commandes clavier personnalisées » (canal `id_custom_*` / commande dédiée) :
   `protocol/led-stream.ts` (commande `0xC0`).
-- [ ] Modèle RGB prévu pour des couleurs **par couche et par LED** (58 × 8) et une source « état réel ».
+- [x] Modèle RGB prévu pour des couleurs **par couche et par LED** (58 × 8) et une source « état réel ».
+- [x] **Étape 2 faite** : couleurs (RGB ou « effet ») et effet propre de chaque couche, en EEPROM côté
+  firmware (`led_layers.c`, protocole LED v2), éditables en mode « Couleurs » de la page Touches (pinceau,
+  glisser, pipette Alt+clic, annuler / rétablir), aperçu de la couche sur le clavier. L'onglet RGB disparaît :
+  l'effet global se règle en mode Couleurs sur la couche 0.
 - [x] Rendu SVG capable d'afficher une couleur par touche à ~20 images/s sans recréer le DOM (`paintLeds`).
 - [x] **Étape 3 faite** : aperçu « Éclairage réel » (`rgb/led-preview.ts`) d'après
   `colagan-pico-split-keyboard/docs/led-stream-protocol.md` ; onglets Touches et RGB, mode démo simulé.

@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { parseVil } from '../io/vil';
 import { KeycodeCatalog } from '../keycodes/catalog';
+import { COLAGAN_DEFAULT_LAYER_COLORS } from '../profiles/colagan-layer-colors';
 import { FakeKeyboard } from './fake-keyboard';
 
 export const fixtureVil = parseVil(readFileSync('tests/fixtures/colagan-v2-default.vil', 'utf8'));
@@ -29,5 +30,6 @@ export function fakeColagan(): FakeKeyboard {
     rows: 10,
     cols: 6,
     keymap: fixtureKeymap(),
+    layerColors: COLAGAN_DEFAULT_LAYER_COLORS,
   });
 }

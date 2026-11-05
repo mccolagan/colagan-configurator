@@ -8,11 +8,19 @@ import {
   getLedStreamInfo,
   LedStreamBusy,
   LedStreamUnsupported,
+  setPreviewLayer,
   type LedStreamInfo,
 } from '../protocol/led-stream';
 
+/** Renouvellement de l'aperçu de couche (le firmware l'abandonne au bout de 3 s). */
+const PREVIEW_RENEW_MS = 1000;
+
 export type LedPaint =
-  { readonly kind: 'on'; readonly css: string } | { readonly kind: 'off' } | { readonly kind: 'unknown' };
+  | { readonly kind: 'on'; readonly css: string }
+  | { readonly kind: 'off' }
+  | { readonly kind: 'unknown' }
+  /** Touche transparente de la couche affichée, sans état réel disponible (laisse voir l'effet). */
+  | { readonly kind: 'effect' };
 
 /** Couleur de chaque touche, clé = keyId(ligne, colonne). */
 export type LedPaints = ReadonlyMap<string, LedPaint>;
@@ -26,6 +34,10 @@ export interface LedPreviewOptions {
   readonly retryMs?: number;
   readonly isHidden?: () => boolean;
   readonly onFrame: (paints: LedPaints) => void;
+  /** Couche à afficher sur le clavier (firmware v2), null = sa couche active. Lu avant chaque image. */
+  readonly previewLayer?: () => number | null;
+  /** Info relue (couche active, luminosité, lien). */
+  readonly onInfo?: (info: LedStreamInfo) => void;
   readonly onState: (state: PreviewState, detail?: string) => void;
 }
 
@@ -39,6 +51,7 @@ export class LedPreview {
   private lastPaints: LedPaints = new Map();
   /** Incrémenté par stop() : une image en vol arrivée après l'arrêt est ignorée. */
   private generation = 0;
+  private sentPreview: { layer: number; at: number } | undefined;
 
   constructor(
     private readonly transport: Transport,
@@ -66,6 +79,11 @@ export class LedPreview {
     this.timer = undefined;
     this.lastPaints = new Map();
     this.options.onFrame(this.lastPaints);
+    if (this.sentPreview) {
+      // le clavier revient à sa couche active (sinon il le ferait seul au bout de 3 s)
+      this.sentPreview = undefined;
+      setPreviewLayer(this.transport, null).catch(() => undefined);
+    }
     if (this.state !== 'unsupported') this.setState('idle');
   }
 
@@ -77,8 +95,10 @@ export class LedPreview {
       if (!this.info || this.frames % (this.options.infoEvery ?? 20) === 0) {
         this.info = await getLedStreamInfo(this.transport);
         if (!this.positions.length) this.positions = await getLedPositions(this.transport, this.info);
+        this.options.onInfo?.(this.info);
       }
       const info = this.info;
+      if (info.layerCount) await this.syncPreview(info.layerCount);
       const frame = await getLedFrame(this.transport, info);
       this.frames++;
       const paints = new Map<string, LedPaint>();
@@ -117,6 +137,22 @@ export class LedPreview {
       this.setState(error instanceof LedStreamBusy ? 'busy' : 'error', message);
       return this.options.retryMs ?? 1000;
     }
+  }
+
+  private async syncPreview(layerCount: number): Promise<void> {
+    const wanted = this.options.previewLayer?.() ?? null;
+    const layer = wanted !== null && wanted < layerCount ? wanted : null;
+    const sent = this.sentPreview;
+    if (layer === null) {
+      if (sent) {
+        this.sentPreview = undefined;
+        await setPreviewLayer(this.transport, null);
+      }
+      return;
+    }
+    if (sent?.layer === layer && performance.now() - sent.at < PREVIEW_RENEW_MS) return;
+    await setPreviewLayer(this.transport, layer);
+    this.sentPreview = { layer, at: performance.now() };
   }
 
   private schedule(delay: number): void {

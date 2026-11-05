@@ -7,6 +7,10 @@ export interface RgbControllerOptions {
   /** Intervalle minimal entre deux envois (ms) : 50 ms ≈ 20 envois/s. */
   readonly interval?: number;
   readonly onError?: (error: unknown) => void;
+  /** Écriture d'un état ; défaut : VialRGB (non enregistré, voir save). */
+  readonly write?: (mode: RgbMode) => Promise<void>;
+  /** Chaque écriture est enregistrée par le clavier (effet d'une couche) : ni « Enregistrer » ni « Rétablir ». */
+  readonly persistent?: boolean;
 }
 
 const sameMode = (a: RgbMode, b: RgbMode): boolean =>
@@ -42,6 +46,10 @@ export class RgbController {
 
   get maxBrightness(): number {
     return this.options.maxBrightness;
+  }
+
+  get persistent(): boolean {
+    return this.options.persistent ?? false;
   }
 
   /** Vrai si le clavier affiche autre chose que ce qui est enregistré dans son EEPROM. */
@@ -92,8 +100,10 @@ export class RgbController {
   private async send(): Promise<void> {
     this.inFlight = true;
     this.pending = false;
+    const mode = { ...this.current };
     try {
-      await setRgbMode(this.transport, { ...this.current });
+      await (this.options.write ?? ((m: RgbMode) => setRgbMode(this.transport, m)))(mode);
+      if (this.persistent) this.saved = mode;
     } catch (error) {
       this.options.onError?.(error);
     } finally {

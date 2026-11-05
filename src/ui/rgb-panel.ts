@@ -28,7 +28,7 @@ export function renderRgbPanel(options: RgbPanelOptions): HTMLElement {
   const { controller } = options;
   const panel = document.createElement('section');
   panel.className = 'rgb';
-  panel.setAttribute('aria-label', t('view.rgb'));
+  panel.setAttribute('aria-label', t('effect.global'));
 
   const effect = document.createElement('select');
   effect.id = 'rgb-effect';
@@ -118,6 +118,10 @@ export function renderRgbPanel(options: RgbPanelOptions): HTMLElement {
   actions.className = 'actions';
   actions.append(swatch, save, revert);
 
+  if (controller.persistent) {
+    // effet de couche : écrit et enregistré à chaque changement
+    save.hidden = revert.hidden = true;
+  }
   panel.append(fields, actions, state);
   if (options.ledmapLayers.length) {
     const note = document.createElement('p');
@@ -141,7 +145,8 @@ export function renderRgbPanel(options: RgbPanelOptions): HTMLElement {
     const dirty = controller.dirty;
     save.disabled = revert.disabled = !dirty;
     state.dataset.level = dirty ? 'warn' : 'ok';
-    state.textContent = message ?? (dirty ? t('rgb.dirty') : t('rgb.clean'));
+    state.textContent =
+      message ?? (controller.persistent ? t('rgb.layerSaved') : dirty ? t('rgb.dirty') : t('rgb.clean'));
   }
 
   sync();

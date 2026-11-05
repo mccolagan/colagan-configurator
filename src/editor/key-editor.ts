@@ -1,5 +1,6 @@
 // Édition du clavier : écriture immédiate, relecture des touches, historique annuler / rétablir commun aux
 // touches, macros, tap-dance et combos (l'annulation réécrit l'ancienne valeur dans le clavier).
+import type { LayerColor } from '../protocol/led-stream';
 import type { Combo, TapDance } from '../protocol/vial';
 
 export interface KeyStore {
@@ -14,6 +15,18 @@ export interface DynamicStore {
   setCombo(index: number, entry: Combo): Promise<void>;
   /** Tampon complet des macros (le déverrouillage éventuel est à la charge de l'implémentation). */
   setMacros(buffer: Uint8Array): Promise<void>;
+}
+
+/** Écriture des couleurs de couche (indice de LED -> couleur, null = transparente). */
+export interface LedStore {
+  setLedColors(layer: number, colors: ReadonlyMap<number, LayerColor>): Promise<void>;
+}
+
+export interface LedChange {
+  readonly kind: 'leds';
+  readonly layer: number;
+  readonly before: ReadonlyMap<number, LayerColor>;
+  readonly after: ReadonlyMap<number, LayerColor>;
 }
 
 export interface KeyChange {
@@ -47,7 +60,7 @@ export interface MacroChange {
   readonly after: Uint8Array;
 }
 
-export type Change = KeyChange | TapDanceChange | ComboChange | MacroChange;
+export type Change = KeyChange | TapDanceChange | ComboChange | MacroChange | LedChange;
 
 export interface AssignResult {
   readonly change: KeyChange | undefined;
@@ -56,9 +69,9 @@ export interface AssignResult {
   readonly stored: number;
 }
 
-const same = (a: unknown, b: unknown): boolean =>
-  JSON.stringify(a instanceof Uint8Array ? [...a] : a) ===
-  JSON.stringify(b instanceof Uint8Array ? [...b] : b);
+const plain = (value: unknown): unknown =>
+  value instanceof Uint8Array ? [...value] : value instanceof Map ? [...value.entries()] : value;
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(plain(a)) === JSON.stringify(plain(b));
 
 export class KeyEditor {
   private readonly done: Change[] = [];
@@ -69,6 +82,7 @@ export class KeyEditor {
   constructor(
     private readonly store: KeyStore,
     private readonly dynamic?: DynamicStore,
+    private readonly leds?: LedStore,
   ) {}
 
   get canUndo(): boolean {
@@ -138,6 +152,11 @@ export class KeyEditor {
   private async write(change: Change, side: 'before' | 'after'): Promise<void> {
     if (change.kind === 'key') {
       await this.store.setKey(change.layer, change.row, change.col, change[side]);
+      return;
+    }
+    if (change.kind === 'leds') {
+      if (!this.leds) throw new Error('Écriture non prise en charge');
+      await this.leds.setLedColors(change.layer, change[side]);
       return;
     }
     const dynamic = this.dynamic;

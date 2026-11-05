@@ -5,6 +5,7 @@ import { parseVil } from '../io/vil';
 import { KeycodeCatalog } from '../keycodes/catalog';
 import { decodeDefinition } from '../protocol/definition';
 import { FakeKeyboard } from '../protocol/fake-keyboard';
+import { COLAGAN_DEFAULT_LAYER_COLORS } from '../profiles/colagan-layer-colors';
 
 export async function createDemoKeyboard(): Promise<FakeKeyboard> {
   const response = await fetch(definitionUrl);
@@ -28,6 +29,7 @@ export async function createDemoKeyboard(): Promise<FakeKeyboard> {
     rows: definition.matrix.rows,
     cols: definition.matrix.cols,
     keymap,
+    layerColors: COLAGAN_DEFAULT_LAYER_COLORS,
   });
   // démo : personne ne peut tenir les touches de déverrouillage, on simule qu'elles le sont
   keyboard.holdingUnlockKeys = true;

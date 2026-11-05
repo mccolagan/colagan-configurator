@@ -242,7 +242,9 @@ svg.keyboard {
 }
 
 .key rect.key__led[data-led='off'] {
-  fill: var(--bg);
+  /* éteinte : assombrie dans les deux thèmes (var(--bg) se confondait avec une touche claire) */
+  fill: #000;
+  fill-opacity: 0.35;
 }
 
 .key rect.key__led[data-led='unknown'] {
@@ -727,4 +729,132 @@ dialog.keycode-dialog .picker {
   margin-top: 0;
   padding-top: 0;
   border-top: 0;
+}
+
+/* Page Touches & couleurs : choix du mode et de l'éclairage affiché */
+.keys-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 24px;
+  margin: 10px 0;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.segmented__label {
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.segmented button {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 12px;
+}
+
+.segmented button[aria-checked='true'] {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.led-preview {
+  margin: 0;
+}
+
+/* Onglet de la couche active sur le clavier */
+.tabs button.tab--keyboard::after {
+  content: ' ●';
+  color: var(--accent);
+}
+
+/* Mode Couleurs */
+svg.keyboard--paint .key {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.key rect.key__led[data-led='effect'] {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 4;
+}
+
+.color-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.color-panel__brush {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.swatch {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 8px;
+  border: 2px solid var(--border);
+}
+
+.swatch[aria-checked='true'] {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.swatch--off {
+  background: #000;
+}
+
+.swatch--transparent {
+  background: repeating-linear-gradient(45deg, var(--surface) 0 5px, var(--border) 5px 10px);
+}
+
+.color-panel input[type='color'] {
+  width: 44px;
+  height: 34px;
+  padding: 0 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.color-panel__current,
+.color-panel__hint {
+  margin: 0;
+}
+
+.color-panel__hint {
+  color: var(--muted);
+}
+
+.color-panel #colors-reset {
+  justify-self: start;
+}
+
+.color-panel__heading h3 {
+  margin: 8px 0 2px;
+  font-size: 1em;
+}
+
+.color-panel__heading p {
+  margin: 0;
+}
+
+.color-panel__effect {
+  display: grid;
+  gap: 8px;
 }

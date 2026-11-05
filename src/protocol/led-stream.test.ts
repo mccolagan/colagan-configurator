@@ -45,7 +45,10 @@ describe('commande LED 0xC0 sur le faux Colagan', () => {
     const kb = fakeColagan();
     const info = await getLedStreamInfo(kb);
     expect(info).toMatchObject({
-      version: 1,
+      version: 2,
+      layerCount: 8,
+      activeLayer: 0,
+      previewLayer: 0xff,
       ledCount: 58,
       colorsPerPacket: 9,
       positionsPerPacket: 13,

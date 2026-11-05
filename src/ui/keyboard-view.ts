@@ -70,7 +70,7 @@ export interface KeyboardViewOptions {
   readonly keys: readonly KeyView[];
   readonly selected?: string;
   /** Absent : dessin en lecture seule (aperçu), touches non sélectionnables. */
-  readonly onSelect?: (row: number, col: number) => void;
+  readonly onSelect?: (row: number, col: number, event: MouseEvent | KeyboardEvent) => void;
 }
 
 export function renderKeyboard({ keys, selected, onSelect }: KeyboardViewOptions): SVGSVGElement {
@@ -123,14 +123,13 @@ export function renderKeyboard({ keys, selected, onSelect }: KeyboardViewOptions
     );
     addLabel(group, view.label, k);
     if (onSelect) {
-      const select = (): void => {
-        onSelect(k.row, k.col);
-      };
-      group.addEventListener('click', select);
+      group.addEventListener('click', (event) => {
+        onSelect(k.row, k.col, event);
+      });
       group.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          select();
+          onSelect(k.row, k.col, event);
         }
       });
     }

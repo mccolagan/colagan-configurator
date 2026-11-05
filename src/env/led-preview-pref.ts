@@ -1,17 +1,20 @@
 const STORAGE_KEY = 'colagan.ledPreview';
 
-/** Aperçu LED en direct : activé par défaut. */
-export function readLedPreview(): boolean {
+/** Éclairage sur le dessin : masqué, couleurs de la couche sélectionnée, ou état réel du clavier. */
+export type LedDisplay = 'off' | 'layer' | 'live';
+
+export function readLedDisplay(): LedDisplay {
   try {
-    return localStorage.getItem(STORAGE_KEY) !== 'off';
+    const value = localStorage.getItem(STORAGE_KEY);
+    return value === 'off' || value === 'live' ? value : 'layer';
   } catch {
-    return true;
+    return 'layer';
   }
 }
 
-export function saveLedPreview(enabled: boolean): void {
+export function saveLedDisplay(display: LedDisplay): void {
   try {
-    localStorage.setItem(STORAGE_KEY, enabled ? 'on' : 'off');
+    localStorage.setItem(STORAGE_KEY, display);
   } catch {
     // stockage indisponible : le choix vaut pour la session
   }

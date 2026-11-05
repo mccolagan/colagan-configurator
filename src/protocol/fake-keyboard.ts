@@ -1,6 +1,6 @@
 // Clavier Vial simulé en mémoire : sert aux tests unitaires, aux tests E2E et au mode démo.
 // Réponses calquées sur le Colagan V2 réel (relevées le 05/11/2026) : VIA 9, Vial 6, VialRGB 1, max 64.
-import { cie, LED_STREAM_COMMAND } from './led-stream';
+import { cie, LED_STREAM_COMMAND, type LayerColor, type LayerEffect } from './led-stream';
 import { readU16be, readU16le, REPORT_SIZE, u16be, u16le, type Transport } from './packet';
 import { QSID_WIDTHS } from './qmk-settings';
 import { ViaCommand } from './via';
@@ -27,7 +27,12 @@ export interface FakeKeyboardOptions {
   readonly ledStream?: boolean;
   /** Horloge (ms) des effets animés simulés ; défaut performance.now. */
   readonly clock?: () => number;
+  /** Couleurs de couche par défaut (firmware v2), par LED ; couche absente = toute transparente. */
+  readonly layerColors?: Readonly<Record<number, readonly LayerColor[]>>;
 }
+
+const LAYER_COUNT = 8;
+const PREVIEW_MS = 3000;
 
 /** LED -> [ligne, colonne] du Colagan V2 : chaîne linéaire, 6 colonnes, 5 pouces par moitié. */
 export function colaganLedPositions(): [number, number][] {
@@ -116,6 +121,11 @@ export class FakeKeyboard implements Transport {
   /** Simule un lien split coupé : les LED de la gauche (esclave) deviennent inconnues. */
   remoteConnected = true;
   readonly ledPositions = colaganLedPositions();
+  /** Couche de frappe simulée. */
+  activeLayer = 0;
+  readonly layerColors: LayerColor[][];
+  readonly layerEffects: LayerEffect[];
+  private preview: { layer: number; at: number } | undefined;
   /** Rapports reçus, pour les assertions des tests. */
   readonly sent: Uint8Array[] = [];
   private unlockInProgress = false;
@@ -137,6 +147,30 @@ export class FakeKeyboard implements Transport {
     );
     this.altRepeatKeys = Array.from({ length: entries }, () => new Uint8Array(6));
     this.settings = new Map(options.settings ?? COLAGAN_SETTINGS);
+    this.layerColors = Array.from({ length: LAYER_COUNT }, (_, layer) => this.defaultColors(layer));
+    this.layerEffects = Array.from({ length: LAYER_COUNT }, () => this.defaultEffect());
+  }
+
+  private defaultColors(layer: number): LayerColor[] {
+    const defaults = this.options.layerColors?.[layer];
+    return Array.from({ length: this.ledPositions.length }, (_, led) => defaults?.[led] ?? null);
+  }
+
+  private defaultEffect(): LayerEffect {
+    return { override: false, effect: 0, speed: 0, hue: 0, saturation: 0, value: 0 };
+  }
+
+  private now(): number {
+    return (this.options.clock ?? (() => performance.now()))();
+  }
+
+  private previewLayer(): number | undefined {
+    return this.preview && this.now() - this.preview.at <= PREVIEW_MS ? this.preview.layer : undefined;
+  }
+
+  /** Couche dont l'éclairage est affiché : aperçu (non expiré) ou couche active. */
+  get displayedLayer(): number {
+    return this.previewLayer() ?? this.activeLayer;
   }
 
   private index(layer: number, row: number, col: number): number {
@@ -223,20 +257,31 @@ export class FakeKeyboard implements Transport {
     return Promise.resolve(msg);
   }
 
-  /** Couleur simulée d'une LED : éteinte, unie, ou arc-en-ciel animé pour les autres effets. */
+  /** Couleur simulée d'une LED : couleur de couche, sinon effet (éteint, uni, ou arc-en-ciel animé). */
   ledColor(led: number): [number, number, number] {
-    const { effect, speed, hue, saturation, value } = this.rgb;
+    const layer = this.displayedLayer;
+    const layerEffect = this.layerEffects[layer];
+    const { effect, speed, hue, saturation, value } = layerEffect?.override ? layerEffect : this.rgb;
     if (effect === 0) return [0, 0, 0];
     const peak = cie(value);
+    const own = this.layerColors[layer]?.[led];
+    if (own) {
+      return [
+        Math.floor((own[0] * peak) / 255),
+        Math.floor((own[1] * peak) / 255),
+        Math.floor((own[2] * peak) / 255),
+      ];
+    }
     if (effect === 2) return hsvToRgb(hue, saturation, peak);
     const [, col = 0] = this.ledPositions[led] ?? [];
     const x = led < LED_LEFT_COUNT ? col : 11 - col;
-    const time = (this.options.clock ?? (() => performance.now()))();
+    const time = this.now();
     return hsvToRgb(Math.floor(hue + x * 20 + (time * (speed + 16)) / 200) & 0xff, saturation, peak);
   }
 
   /** Réponses de led_stream.c (droite maître). */
   private ledStream(msg: Uint8Array): void {
+    const request = msg.slice();
     const [, sub = 0, marker = 0, start = 0] = msg;
     const count = this.ledPositions.length;
     msg.fill(0, 2);
@@ -246,11 +291,16 @@ export class FakeKeyboard implements Transport {
       return;
     }
     if (sub === 0) {
-      const flags = 0x01 | (this.remoteConnected ? 0x02 : 0) | (this.rgb.effect ? 0x04 : 0);
+      const flags = 0x09 | (this.remoteConnected ? 0x02 : 0) | (this.rgb.effect ? 0x04 : 0);
+      const info = [2, count, 9, 13, LED_LEFT_COUNT, 1, flags, this.options.maxBrightness ?? 64];
       msg.set(
-        [1, count, 9, 13, LED_LEFT_COUNT, 1, flags, this.options.maxBrightness ?? 64, this.rgb.value, 10, 6],
+        [...info, this.rgb.value, 10, 6, LAYER_COUNT, this.activeLayer, this.previewLayer() ?? 0xff],
         3,
       );
+      return;
+    }
+    if (sub >= 3 && sub <= 8) {
+      msg[2] = this.layerCommand(sub, start, request, msg);
       return;
     }
     if (sub !== 1 && sub !== 2) {
@@ -273,6 +323,66 @@ export class FakeKeyboard implements Transport {
         msg.set(this.ledColor(led), 5 + 3 * i);
       }
     }
+  }
+
+  /** Sous-commandes 0x03-0x08 de led_stream.c ; `request` = copie de la requête, `msg` = réponse. */
+  private layerCommand(sub: number, start: number, request: Uint8Array, msg: Uint8Array): number {
+    const layer = request[4] ?? 0;
+    msg[4] = layer;
+    if (sub === 7) {
+      this.preview = layer < LAYER_COUNT ? { layer, at: this.now() } : undefined;
+      return 0;
+    }
+    if (sub === 8) {
+      if (layer > LAYER_COUNT) return 0x02;
+      for (let l = 0; l < LAYER_COUNT; l++) {
+        if (layer === LAYER_COUNT || layer === l) {
+          this.layerColors[l] = this.defaultColors(l);
+          this.layerEffects[l] = this.defaultEffect();
+        }
+      }
+      return 0;
+    }
+    const colors = this.layerColors[layer];
+    if (!colors) return 0x02;
+    if (sub === 3) {
+      if (start >= colors.length) return 0x02;
+      const n = Math.min(8, colors.length - start);
+      msg[5] = n;
+      for (let i = 0; i < n; i++) {
+        const color = colors[start + i];
+        if (color) msg.set(color, 7 + 3 * i);
+        else msg[6] = (msg[6] ?? 0) | (1 << i);
+      }
+      return 0;
+    }
+    msg.set(request.subarray(5), 5);
+    if (sub === 4) {
+      const n = request[5] ?? 0;
+      const mask = request[6] ?? 0;
+      if (!n || n > 8 || start + n > colors.length) return 0x02;
+      for (let i = 0; i < n; i++) {
+        const o = 7 + 3 * i;
+        colors[start + i] =
+          mask & (1 << i) ? null : [request[o] ?? 0, request[o + 1] ?? 0, request[o + 2] ?? 0];
+      }
+      return 0;
+    }
+    if (sub === 5) {
+      const e = this.layerEffects[layer] ?? this.defaultEffect();
+      msg.fill(0, 5);
+      msg.set([e.override ? 1 : 0, ...u16le(e.effect), e.speed, e.hue, e.saturation, e.value], 5);
+      return 0;
+    }
+    this.layerEffects[layer] = {
+      override: (request[5] ?? 0) !== 0,
+      effect: readU16le(request, 6),
+      speed: request[8] ?? 0,
+      hue: request[9] ?? 0,
+      saturation: request[10] ?? 0,
+      value: Math.min(request[11] ?? 0, this.options.maxBrightness ?? 64),
+    };
+    return 0;
   }
 
   /** Comme vial_keycode_firewall : QK_BOOT refusé tant que le clavier est verrouillé. */
