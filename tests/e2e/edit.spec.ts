@@ -43,6 +43,12 @@ test('recherche par caractère AZERTY', async ({ page }) => {
   await page.getByRole('searchbox').fill('ù');
   await expect(page.locator('.picker__grid [data-keycode]')).toHaveCount(1);
   await expect(page.locator('[data-keycode="KC_QUOTE"]')).toBeVisible();
+  await expect(page.locator('.picker__categories')).toBeHidden();
+
+  // « q » en AZERTY : la touche A du QWERTY (KC_A), pas KC_Q
+  await page.getByRole('searchbox').fill('q');
+  await expect(page.locator('.picker__grid [data-keycode]')).toHaveCount(1);
+  await expect(page.locator('[data-keycode="KC_A"]')).toBeVisible();
 });
 
 test('saisie avancée et keycode masqué', async ({ page }) => {

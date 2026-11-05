@@ -51,6 +51,11 @@
   box-sizing: border-box;
 }
 
+/* l'attribut hidden doit l'emporter sur les display: flex / grid des composants */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--bg);

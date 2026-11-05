@@ -156,7 +156,10 @@ export class KeycodePicker {
           if (seen.has(e.id)) return false;
           const chars = this.options.layout === 'azerty' ? azertySearchChars(e.value) : [];
           const match = exact
-            ? chars.includes(this.query) || e.label.toLowerCase() === this.query.toLowerCase()
+            ? // touche AZERTY connue : seuls ses caractères comptent (sinon « q » trouverait aussi KC_Q)
+              chars.length
+              ? chars.includes(this.query)
+              : e.label.toLowerCase() === this.query.toLowerCase()
             : [e.id, ...(e.aliases ?? []), e.label, e.tooltip ?? '', ...chars].some((s) =>
                 normalize(s).includes(q),
               );
