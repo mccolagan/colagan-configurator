@@ -70,8 +70,8 @@ src/
   i18n/         fr.json (+ en.json plus tard)
 ```
 
-- [ ] `protocol/` n'importe ni DOM ni WebHID : une interface `Transport { send(bytes): Promise<Uint8Array> }`.
-- [ ] Un **faux transport** (clavier simulé en mémoire) sert aux tests unitaires, aux tests E2E et au mode démo.
+- [x] `protocol/` n'importe ni DOM ni WebHID : une interface `Transport { send(bytes): Promise<Uint8Array> }`.
+- [ ] Un **faux transport** (clavier simulé en mémoire) sert aux tests unitaires, aux tests E2E et au mode démo. *(fait : `FakeKeyboard`, calqué sur les réponses réelles du Colagan ; reste E2E + démo)*
 - [ ] Le profil Colagan est **optionnel** : un clavier Vial inconnu fonctionne avec sa seule définition.
 
 ## 4. Protocole (référence vérifiée dans `vial-qmk/quantum/via.h`, `vial.h`, `vial.c`, `vialrgb.*`)
@@ -99,9 +99,9 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
 
 **VialRGB** (`0x08` get / `0x07` set / `0x09` save) : `0x40` info, `0x41` mode courant
 (`id u16 LE, vitesse, H, S, V`), `0x42` liste des effets supportés (paginée), `0x43` nb de LED, `0x44` infos LED.
-- [ ] Les **identifiants VialRGB ne sont pas les numéros d'effets QMK** (ex. 14 = cycle gauche-droite,
+- [x] Les **identifiants VialRGB ne sont pas les numéros d'effets QMK** (ex. 14 = cycle gauche-droite,
   19 = pinwheel, 5 = dégradé gauche-droite, 2 = couleur unie) : table issue de `vialrgb_effects.inc`.
-- [ ] La liste affichée vient de `0x42` (effets réellement compilés), jamais d'une liste en dur.
+- [x] La liste affichée vient de `0x42` (effets réellement compilés), jamais d'une liste en dur.
 
 **Déverrouillage Vial** (le firmware n'est pas `VIAL_INSECURE`) : nécessaire pour **écrire des macros**,
 **assigner `QK_BOOT`** (remplacé par `KC_NO` sinon), lire l'état de la matrice, sauter au bootloader.
@@ -119,7 +119,7 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
 - [ ] Navigateur sans WebHID : page explicative (Chrome / Edge requis) + mode démo. *(message fait, mode démo à venir)*
 - [ ] Linux : message d'aide si l'ouverture échoue (règle udev hidraw), avec la règle à copier.
 - [ ] Avertir que **Vial / Pipette ouverts en même temps** peuvent interférer.
-- [ ] Toutes les commandes passent par **une file unique** (une requête à la fois, timeout ~1 s, 2 essais).
+- [x] Toutes les commandes passent par **une file unique** (une requête à la fois, timeout ~1 s, 2 essais).
 
 ### 5.2 Dessin du clavier
 - [ ] Rendu SVG à partir du **layout KLE** de la définition Vial : `x`, `y`, `w`, `h`, rotations `r/rx/ry`
@@ -164,7 +164,7 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
   écriture soumise au déverrouillage.
 - [ ] Tap-dance : appui / maintien / double appui / appui-maintien + délai (ms).
 - [ ] Combos : jusqu'à 4 touches → 1 keycode ; key overrides si le firmware en expose.
-- [ ] Nombre d'entrées lu via `0xFE 0x0D 0x00`, jamais supposé.
+- [x] Nombre d'entrées lu via `0xFE 0x0D 0x00`, jamais supposé.
 
 ### 5.7 Sauvegarde / restauration
 - [ ] Export `.vil` : keymap, macros, tap-dance, combos, key overrides, réglages QMK, UID, versions.
@@ -174,15 +174,15 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
 - [ ] **Instantané local automatique** (IndexedDB, par UID) à chaque connexion et après chaque modification.
 - [ ] **Détection d'un reflash** : chaque compilation Vial remet la keymap par défaut (identifiant de build
   aléatoire). Si la keymap lue = celle par défaut et qu'un instantané plus riche existe → proposer de restaurer.
-- [ ] Format validé par **un `.vil` réel exporté de Vial** : fixture `tests/fixtures/colagan-v2-default.vil`
+- [x] Format validé par **un `.vil` réel exporté de Vial** : fixture `tests/fixtures/colagan-v2-default.vil`
   (vial.rocks, keymap par défaut du 05/11/2026), aller-retour **octet pour octet** (JSON compact sur une ligne).
-- [ ] Structure constatée : `version` 1, `uid` (u64 = les 8 octets de l'UID lus en little-endian),
+- [x] Structure constatée : `version` 1, `uid` (u64 = les 8 octets de l'UID lus en little-endian),
   `layout[8][10][6]` en **noms** de keycodes (`-1` = position sans touche, ex. `[9,5]`), `encoder_layout`,
   `layout_options` -1, `macro[16]` (listes d'actions), `vial_protocol` 6, `via_protocol` 9,
   `tap_dance[32]` = `[tap, hold, double_tap, tap_hold, term_ms]`, `combo[32]` = `[k1, k2, k3, k4, sortie]`,
   `key_override[32]` (objets `trigger`, `replacement`, `layers`, `trigger_mods`, `negative_mod_mask`,
   `suppressed_mods`, `options`), `alt_repeat_key[32]` (objets), `settings` {id QMK Settings: valeur} (26).
-- [ ] **`uid` > 2^53** : un `JSON.parse` standard l'arrondit → parseur préservant les grands entiers
+- [x] **`uid` > 2^53** : un `JSON.parse` standard l'arrondit → parseur préservant les grands entiers
   (BigInt / texte brut) pour la lecture comme pour l'écriture.
 
 ### 5.8 Mode démo (sans clavier)
@@ -202,11 +202,11 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
   décompression de la définition, `.vil` aller-retour.
 - [ ] Playwright : parcours principaux en mode démo (connexion simulée, édition, annuler, export / import, RGB).
 - [ ] GitHub Actions : lint + tests + build à chaque push ; déploiement Pages sur `main`.
-- [ ] Table des keycodes **générée** (script versionné, lecture **texte** du fichier, jamais d'exécution) depuis
+- [x] Table des keycodes **générée** (script versionné, lecture **texte** du fichier, jamais d'exécution) depuis
   `~/perso/clavier/vial-gui/src/main/python/keycodes/keycodes_v6.py` (clone de `vial-kb/vial-gui`, `aef8222`) :
   dictionnaire nom Vial → valeur (519 entrées, ex. `KC_BSPACE` 0x2A, `KC_LSHIFT` 0xE1, `RM_VALU` 0x7849,
   `QK_BOOT` 0x7C00). Le `.vil` utilise ces noms historiques, pas les alias QMK actuels (`KC_BSPC`, `KC_LSFT`…).
-- [ ] Formes calculées, absentes de la table : `USERnn` = `0x7E00 + nn` (`customKeycodes`, `USER00` = `SEL x3`),
+- [x] Formes calculées, absentes de la table : `USERnn` = `0x7E00 + nn` (`customKeycodes`, `USER00` = `SEL x3`),
   `MO(n)` / `TO(n)` / `TG(n)` / `OSL(n)` / `LT(n, kc)`, modificateurs `LSFT(kc)`…, `MT(mod, kc)`, `TD(n)`, `M0..` :
   encodage / décodage testés sur toutes les valeurs de la fixture.
 - [ ] README : usage, navigateurs supportés, règle udev Linux, mode démo, lien vers le dépôt du clavier.
@@ -254,7 +254,7 @@ Ouvrir le serveur Docker via l'IP du LAN (`http://192.168.x.x:5173`) **désactiv
 - **Une requête à la fois** : le firmware répond en écho au même rapport ; deux requêtes concurrentes
   mélangent les réponses.
 - **Endianness** mixte VIA (BE) / Vial (LE) ; la définition fait plusieurs kilo-octets (≈ 80 blocs de 32 o).
-- **LZMA** : format exact (`.lzma` « alone » ou `.xz`) à confirmer sur un dump réel avant de choisir la lib.
+- **Définition compressée en XZ** (en-tête `FD 37 7A 58 5A`, CRC64), pas LZMA brut : lib `xz-decompress` (XZ Embedded en WebAssembly), validée sur la fixture `tests/fixtures/colagan-v2-definition.xz` (508 octets).
 - **Keycodes** : deux vocabulaires (noms Vial dans le `.vil`, alias QMK dans le code) ; valeurs du protocole Vial 6 = QMK récent (`QK_KB_0` = `0x7E00`, `MO(n)` = `0x5220|n`…) ;
   ne pas reprendre d'anciennes tables VIA.
 - **Reflash = keymap par défaut** (Vial `BUILD_ID` aléatoire) : la sauvegarde n'est pas un confort, c'est

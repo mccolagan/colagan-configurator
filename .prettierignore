@@ -4,3 +4,5 @@ test-results
 playwright-report
 package-lock.json
 SPEC.md
+src/keycodes/vial-v6.generated.ts
+tests/fixtures
