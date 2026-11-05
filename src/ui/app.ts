@@ -3,6 +3,7 @@ import { detectHidSupport, type HidSupport } from '../env/support';
 import { readLabelLayout, saveLabelLayout } from '../env/label-layout';
 import { applyTheme, readTheme, type ThemeChoice } from '../env/theme';
 import { DynamicState } from '../editor/dynamic-state';
+import { trappedLayers } from '../editor/layer-guard';
 import { KeyEditor, type Change, type DynamicStore, type KeyChange } from '../editor/key-editor';
 import { t, type MessageKey } from '../i18n';
 import { KeycodeCatalog } from '../keycodes/catalog';
@@ -534,6 +535,22 @@ export class App {
       if (name === 'QK_BOOT' && !(await this.ensureUnlocked())) return;
     }
     const position = { layer: this.layer, row: target.row, col: target.col };
+    const trapped = trappedLayers(
+      {
+        layers: session.client.info.layers,
+        positions: session.keys.map((k) => [k.row, k.col] as const),
+        getKey: (l, r, c) => session.client.getKey(l, r, c),
+      },
+      { ...position, code },
+      new Set(session.profile?.exitKeycodes ?? []),
+    );
+    if (trapped.length) {
+      const layers = trapped.map((l) => layerName(session.profile, l)).join(', ');
+      const ok = await confirmDialog(t('guard.title'), t('guard.body', { layers }), {
+        confirmLabel: t('guard.confirm'),
+      });
+      if (!ok) return;
+    }
     try {
       const result = await editor.assign(position.layer, position.row, position.col, code);
       if (result.stored !== result.requested) {

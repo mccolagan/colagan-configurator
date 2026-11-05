@@ -5,6 +5,8 @@ export interface KeyboardProfile {
   readonly layerNames: readonly string[];
   /** Couches dont les couleurs sont imposées par le firmware (ledmaps) et masquent l'effet RGB. */
   readonly ledmapLayers?: readonly number[];
+  /** Keycodes propres au firmware qui font sortir d'une couche (ex. SEL x3 -> sélecteur). */
+  readonly exitKeycodes?: readonly number[];
 }
 
 /** Colagan V2 : VIAL_KEYBOARD_UID {0x0E, 0xDC, 0x42, 0x07, 0xFC, 0x15, 0xEE, 0xC7} lu en little-endian. */
@@ -14,6 +16,8 @@ const COLAGAN_V2: KeyboardProfile = {
   id: 'colagan-v2',
   layerNames: ['BASE', 'FN', 'FPS', 'MMO', 'MMO UI', 'Sélecteur'],
   ledmapLayers: [2, 3, 4, 5],
+  // USER00 = SEL x3 : trois appuis ouvrent le sélecteur, qui a ses TO()
+  exitKeycodes: [0x7e00],
 };
 
 export function profileFor(uid: bigint): KeyboardProfile | undefined {

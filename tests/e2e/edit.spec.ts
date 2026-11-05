@@ -90,3 +90,13 @@ test('QK_BOOT demande confirmation puis le déverrouillage du clavier', async ({
   await page.getByRole('button', { name: 'Affecter quand même' }).click();
   await expect(page.locator('#key-details')).toContainText('QK_BOOT', { timeout: 10_000 });
 });
+
+test('avertit avant de retirer la dernière sortie d’une couche de jeu', async ({ page }) => {
+  await page.getByRole('tab', { name: '2 · FPS' }).click();
+  await key(page, '9,4').click();
+  await page.locator('[data-keycode="KC_Q"]').click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('quitter la couche FPS');
+  await dialog.getByRole('button', { name: 'Annuler' }).click();
+  await expect(page.locator('#key-details')).toContainText('USER00');
+});

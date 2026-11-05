@@ -197,5 +197,8 @@
   "dyn.removeKey": "Retirer {name}",
   "dyn.up": "Monter",
   "dyn.down": "Descendre",
-  "dyn.remove": "Supprimer l'action"
+  "dyn.remove": "Supprimer l'action",
+  "guard.title": "Dernière sortie de couche",
+  "guard.body": "Après ce changement, plus aucune touche ne permet de quitter la couche {layers} (TO, SEL x3…). Une fois dedans, le clavier y resterait bloqué jusqu'au débranchement.",
+  "guard.confirm": "Modifier quand même"
 }

@@ -141,10 +141,10 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
 - [x] **Annuler / rétablir** sur toute la session (touches, macros, tap-dance, combos) ; l'annulation réécrit
   l'ancienne valeur dans le clavier.
 - [ ] *(reporté, cf. §12)* Glisser-déposer d'une touche sur une autre (échange) et copier / coller d'une couche entière.
-- [ ] Garde-fous : impossible de retirer **la dernière touche** permettant de quitter une couche de jeu
+- [x] Garde-fous : impossible de retirer **la dernière touche** permettant de quitter une couche de jeu
   (`SEL x3`, `TO(0)`, `MO`…) sans avertissement ; `QK_BOOT` signalé comme « fige le clavier ».
-  *(fait : confirmation pour `QK_BOOT` / `QK_CLEAR_EEPROM`, refus du firmware verrouillé signalé ; reste la
-  dernière touche de sortie d'une couche de jeu)*
+  *(confirmation pour `QK_BOOT` / `QK_CLEAR_EEPROM` ; avertissement si une couche atteinte par TO/TG/DF perd sa
+  dernière sortie, transparence vers la couche 0 comprise ; SEL x3 déclaré sortie dans le profil)*
 
 ### 5.4 Étiquettes AZERTY
 - [x] Table de correspondance keycode → caractère AZERTY FR (dont `KC_Q`→a, `KC_W`→z, `KC_SCLN`→m,
