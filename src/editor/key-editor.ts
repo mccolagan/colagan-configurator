@@ -37,6 +37,12 @@ export class KeyEditor {
     return this.undone.length > 0;
   }
 
+  /** Après un import : les valeurs « avant » de l'historique ne correspondent plus au clavier. */
+  clear(): void {
+    this.done.length = 0;
+    this.undone.length = 0;
+  }
+
   assign(layer: number, row: number, col: number, keycode: number): Promise<AssignResult> {
     return this.enqueue(async () => {
       const before = this.store.getKey(layer, row, col);

@@ -21,7 +21,7 @@ export async function createDemoKeyboard(): Promise<FakeKeyboard> {
   const keymap = Uint16Array.from(
     vil.layout.flat(2).map((name) => (name === -1 ? 0 : catalog.deserialize(name))),
   );
-  return new FakeKeyboard({
+  const keyboard = new FakeKeyboard({
     definition: compressed,
     uid: vil.uid,
     layers,
@@ -29,4 +29,7 @@ export async function createDemoKeyboard(): Promise<FakeKeyboard> {
     cols: definition.matrix.cols,
     keymap,
   });
+  // démo : personne ne peut tenir les touches de déverrouillage, on simule qu'elles le sont
+  keyboard.holdingUnlockKeys = true;
+  return keyboard;
 }

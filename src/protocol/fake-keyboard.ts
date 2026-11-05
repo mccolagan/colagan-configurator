@@ -1,6 +1,7 @@
 // Clavier Vial simulé en mémoire : sert aux tests unitaires, aux tests E2E et au mode démo.
 // Réponses calquées sur le Colagan V2 réel (relevées le 05/11/2026) : VIA 9, Vial 6, VialRGB 1, max 64.
 import { readU16be, readU16le, REPORT_SIZE, u16be, u16le, type Transport } from './packet';
+import { QSID_WIDTHS } from './qmk-settings';
 import { ViaCommand } from './via';
 import { DynamicEntryOp, VialCommand } from './vial';
 
@@ -19,7 +20,41 @@ export interface FakeKeyboardOptions {
   readonly macroCount?: number;
   readonly macroBufferSize?: number;
   readonly dynamicEntries?: number;
+  /** Réglages QMK gérés (qsid -> valeur) ; par défaut ceux du Colagan V2. */
+  readonly settings?: ReadonlyMap<number, number>;
 }
+
+/** Réglages QMK du Colagan V2 réel (qsid 8 non géré par le firmware). */
+export const COLAGAN_SETTINGS: ReadonlyMap<number, number> = new Map([
+  [1, 0],
+  [2, 50],
+  [3, 0],
+  [4, 175],
+  [5, 5],
+  [6, 5000],
+  [7, 200],
+  [9, 10],
+  [10, 20],
+  [11, 8],
+  [12, 10],
+  [13, 30],
+  [14, 10],
+  [15, 80],
+  [16, 8],
+  [17, 40],
+  [18, 0],
+  [19, 80],
+  [20, 5],
+  [21, 0],
+  [22, 0],
+  [23, 0],
+  [24, 0],
+  [25, 200],
+  [26, 0],
+  [27, 0],
+]);
+
+const settingWidth = (qsid: number): number => QSID_WIDTHS.get(qsid) ?? 1;
 
 export const COLAGAN_SUPPORTED_EFFECTS = [
   1, 2, 3, 5, 6, 13, 14, 15, 16, 17, 19, 20, 23, 24, 25, 28, 29, 30, 31, 34, 41, 42, 43,
@@ -34,6 +69,7 @@ export class FakeKeyboard implements Transport {
   readonly combos: Uint8Array[];
   readonly keyOverrides: Uint8Array[];
   readonly altRepeatKeys: Uint8Array[];
+  readonly settings: Map<number, number>;
   rgb = { effect: 14, speed: 60, hue: 0, saturation: 255, value: 40 };
   savedRgb = { ...this.rgb };
   unlocked = false;
@@ -55,8 +91,12 @@ export class FakeKeyboard implements Transport {
     tdDefault.set(u16le(200), 8);
     this.tapDance = Array.from({ length: entries }, () => tdDefault.slice());
     this.combos = Array.from({ length: entries }, () => new Uint8Array(10));
-    this.keyOverrides = Array.from({ length: entries }, () => new Uint8Array(10));
+    // valeurs par défaut du firmware : toutes les couches (0xFFFF), options 7 (relevées sur le vrai clavier)
+    this.keyOverrides = Array.from({ length: entries }, () =>
+      Uint8Array.from([0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 7]),
+    );
     this.altRepeatKeys = Array.from({ length: entries }, () => new Uint8Array(6));
+    this.settings = new Map(options.settings ?? COLAGAN_SETTINGS);
   }
 
   private index(layer: number, row: number, col: number): number {
@@ -247,6 +287,38 @@ export class FakeKeyboard implements Transport {
       case VialCommand.dynamicEntryOp:
         this.dynamic(msg);
         break;
+      case VialCommand.qmkSettingsQuery: {
+        const after = readU16le(msg, 2);
+        const ids = [...this.settings.keys()].filter((q) => q > after).sort((a, b) => a - b);
+        msg.fill(0xff);
+        ids.slice(0, REPORT_SIZE / 2).forEach((q, i) => {
+          msg.set(u16le(q), i * 2);
+        });
+        break;
+      }
+      case VialCommand.qmkSettingsGet: {
+        const qsid = readU16le(msg, 2);
+        const value = this.settings.get(qsid);
+        msg.fill(0);
+        if (value === undefined) {
+          msg[0] = 1;
+          break;
+        }
+        for (let i = 0; i < settingWidth(qsid); i++) msg[1 + i] = Math.floor(value / 256 ** i) % 256;
+        break;
+      }
+      case VialCommand.qmkSettingsSet: {
+        const qsid = readU16le(msg, 2);
+        if (!this.settings.has(qsid)) {
+          msg[0] = 1;
+          break;
+        }
+        let value = 0;
+        for (let i = settingWidth(qsid) - 1; i >= 0; i--) value = value * 256 + (msg[4 + i] ?? 0);
+        this.settings.set(qsid, value);
+        msg[0] = 0;
+        break;
+      }
       default:
         msg.fill(0xff);
     }

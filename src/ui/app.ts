@@ -15,7 +15,9 @@ import { HidTransport } from '../transport/hid-transport';
 import { confirmDialog } from './confirm';
 import { keyId, renderKeyboard, type KeyView } from './keyboard-view';
 import { KeycodePicker, RISKY_KEYCODES } from './keycode-picker';
+import { renderBackupPanel } from './backup-panel';
 import { renderRgbPanel } from './rgb-panel';
+import { unlockKeyboard } from './unlock-dialog';
 
 // Interface raw HID de VIA / Vial
 const RAW_HID_FILTER: HIDDeviceFilter = { usagePage: 0xff60, usage: 0x61 };
@@ -55,7 +57,7 @@ export class App {
   private selected: { row: number; col: number } | undefined;
   private layout: LabelLayout = readLabelLayout();
   private view: WorkspaceView | undefined;
-  private section: 'keys' | 'rgb' = 'keys';
+  private section: 'keys' | 'rgb' | 'backup' = 'keys';
   private readonly support = detectHidSupport(window);
 
   constructor(private readonly root: HTMLElement) {}
@@ -280,6 +282,21 @@ export class App {
     const rgbSection = document.createElement('div');
     rgbSection.id = 'section-rgb';
     rgbSection.append(this.rgbContent(session));
+    const backupSection = document.createElement('div');
+    backupSection.id = 'section-backup';
+    backupSection.append(
+      renderBackupPanel({
+        client: session.client,
+        catalog: session.catalog,
+        positions: new Set(session.keys.map((k) => keyId(k.row, k.col))),
+        keyboardName: session.client.info.definition.name ?? 'clavier',
+        ensureUnlocked: () => this.ensureUnlocked(),
+        onImported: () => {
+          session.editor.clear();
+          this.refresh();
+        },
+      }),
+    );
 
     const nav = document.createElement('div');
     nav.className = 'tabs sections';
@@ -288,6 +305,7 @@ export class App {
     const showSection = (): void => {
       keysSection.hidden = this.section !== 'keys';
       rgbSection.hidden = this.section !== 'rgb';
+      backupSection.hidden = this.section !== 'backup';
       for (const tab of nav.children) {
         tab.setAttribute('aria-selected', String((tab as HTMLElement).dataset.section === this.section));
       }
@@ -295,6 +313,7 @@ export class App {
     for (const [id, label] of [
       ['keys', t('view.keys')],
       ['rgb', t('view.rgb')],
+      ['backup', t('view.backup')],
     ] as const) {
       const tab = document.createElement('button');
       tab.type = 'button';
@@ -308,9 +327,20 @@ export class App {
       nav.append(tab);
     }
     showSection();
-    workspace.append(nav, keysSection, rgbSection);
+    workspace.append(nav, keysSection, rgbSection, backupSection);
     this.view = { tabs, frame, details, editStatus, undo, redo, picker };
     this.refresh();
+  }
+
+  /** Déverrouillage Vial (macros, QK_BOOT) : touches désignées par leur étiquette sur la couche 0. */
+  private ensureUnlocked(): Promise<boolean> {
+    const session = this.session;
+    if (!session) return Promise.resolve(false);
+    const { client, catalog } = session;
+    return unlockKeyboard(client.transport, (row, col) => {
+      const label = flatLabel(keyLabel(catalog, client.getKey(0, row, col), this.layout));
+      return `« ${label} » [${keyId(row, col)}]`;
+    });
   }
 
   private rgbContent(session: Session): HTMLElement {
@@ -436,6 +466,8 @@ export class App {
     if (RISKY_KEYCODES.has(name)) {
       const body = name === 'QK_BOOT' ? t('edit.confirmBoot') : t('edit.confirmClear');
       if (!(await confirmDialog(t('edit.confirmTitle', { name }), body))) return;
+      // QK_BOOT n'est accepté par le firmware que déverrouillé (sinon il enregistre KC_NO)
+      if (name === 'QK_BOOT' && !(await this.ensureUnlocked())) return;
     }
     const position = { layer: this.layer, row: target.row, col: target.col };
     try {

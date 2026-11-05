@@ -28,11 +28,11 @@ et des cases à cocher qui constituent la définition de « terminé ».
 ## 2. Objectifs et non-objectifs
 
 **Objectifs (étape 1)**
-- [ ] Éditer n'importe quelle touche de n'importe quelle couche en cliquant sur un dessin fidèle du clavier.
-- [ ] Régler le RGB (effet, couleur, luminosité, vitesse) avec effet **immédiat** sur le clavier, puis enregistrer.
-- [ ] Sauvegarder / restaurer la configuration dans un fichier **compatible `.vil`** (Vial, Pipette).
+- [x] Éditer n'importe quelle touche de n'importe quelle couche en cliquant sur un dessin fidèle du clavier.
+- [x] Régler le RGB (effet, couleur, luminosité, vitesse) avec effet **immédiat** sur le clavier, puis enregistrer.
+- [x] Sauvegarder / restaurer la configuration dans un fichier **compatible `.vil`** (Vial, Pipette).
 - [ ] Éditer macros, tap-dance et combos.
-- [ ] Afficher les étiquettes **telles qu'elles s'écrivent en AZERTY** (bascule QWERTY possible).
+- [x] Afficher les étiquettes **telles qu'elles s'écrivent en AZERTY** (bascule QWERTY possible).
 
 **Non-objectifs (étape 1)**
 - Modifier ou flasher le firmware (pas de WebUSB/UF2 dans l'app).
@@ -71,7 +71,7 @@ src/
 ```
 
 - [x] `protocol/` n'importe ni DOM ni WebHID : une interface `Transport { send(bytes): Promise<Uint8Array> }`.
-- [ ] Un **faux transport** (clavier simulé en mémoire) sert aux tests unitaires, aux tests E2E et au mode démo. *(fait : `FakeKeyboard`, calqué sur les réponses réelles du Colagan ; reste E2E + démo)*
+- [x] Un **faux transport** (clavier simulé en mémoire) sert aux tests unitaires, aux tests E2E et au mode démo. *(`FakeKeyboard`, calqué sur les réponses réelles du Colagan, réglages QMK compris)*
 - [ ] Le profil Colagan est **optionnel** : un clavier Vial inconnu fonctionne avec sa seule définition.
 
 ## 4. Protocole (référence vérifiée dans `vial-qmk/quantum/via.h`, `vial.h`, `vial.c`, `vialrgb.*`)
@@ -105,27 +105,27 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
 
 **Déverrouillage Vial** (le firmware n'est pas `VIAL_INSECURE`) : nécessaire pour **écrire des macros**,
 **assigner `QK_BOOT`** (remplacé par `KC_NO` sinon), lire l'état de la matrice, sauter au bootloader.
-- [ ] L'UI détecte le besoin, affiche **quelles touches tenir** (positions renvoyées par `0xFE 0x05`,
+- [x] L'UI détecte le besoin, affiche **quelles touches tenir** (positions renvoyées par `0xFE 0x05`,
   sur le Colagan : les deux touches 1,5U extérieures de la droite, haut et bas) et une jauge de progression.
-- [ ] Toute action protégée tentée sans déverrouillage est expliquée, jamais échouée en silence.
+- [x] Toute action protégée tentée sans déverrouillage est expliquée, jamais échouée en silence.
 
 ## 5. Fonctionnalités et critères d'acceptation
 
 ### 5.1 Connexion
-- [ ] Bouton « Connecter » → `navigator.hid.requestDevice` filtré sur l'usage page `0xFF60`.
-- [ ] Reconnexion automatique aux appareils déjà autorisés (`navigator.hid.getDevices()`), gestion du
+- [x] Bouton « Connecter » → `navigator.hid.requestDevice` filtré sur l'usage page `0xFF60`.
+- [x] Reconnexion automatique aux appareils déjà autorisés (`navigator.hid.getDevices()`), gestion du
   débranchement (`disconnect`) avec bandeau d'état et reprise propre.
-- [ ] Contrôles à la connexion : protocole Vial, UID → profil, nb de couches, taille matrice, définition.
-- [ ] Navigateur sans WebHID : page explicative (Chrome / Edge requis) + mode démo. *(message fait, mode démo à venir)*
+- [x] Contrôles à la connexion : protocole Vial, UID → profil, nb de couches, taille matrice, définition.
+- [x] Navigateur sans WebHID : page explicative (Chrome / Edge requis) + mode démo.
 - [ ] Linux : message d'aide si l'ouverture échoue (règle udev hidraw), avec la règle à copier.
 - [ ] Avertir que **Vial / Pipette ouverts en même temps** peuvent interférer.
 - [x] Toutes les commandes passent par **une file unique** (une requête à la fois, timeout ~1 s, 2 essais).
 
 ### 5.2 Dessin du clavier
-- [ ] Rendu SVG à partir du **layout KLE** de la définition Vial : `x`, `y`, `w`, `h`, rotations `r/rx/ry`
+- [x] Rendu SVG à partir du **layout KLE** de la définition Vial : `x`, `y`, `w`, `h`, rotations `r/rx/ry`
   (pouces en arc à ±45° / ±22,5°), colonne extérieure 1,5U, moitié gauche en miroir.
 - [ ] Mise à l'échelle responsive (écran large → téléphone en paysage), aucun défilement horizontal de page.
-- [ ] Onglets de couches nommés par le profil (BASE, FN, FPS, MMO, MMO UI, Sélecteur, 6, 7).
+- [x] Onglets de couches nommés par le profil (BASE, FN, FPS, MMO, MMO UI, Sélecteur, 6, 7).
 - [ ] Touches transparentes (`KC_TRNS`) et vides (`KC_NO`) visuellement distinctes ; option « afficher ce que
   donne la touche transparente » (couche résolue en dessous).
 - [ ] Indication des couleurs `ledmaps` de référence du profil sur les couches de jeu (lecture seule, étape 1).
@@ -169,11 +169,14 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
 - [x] Nombre d'entrées lu via `0xFE 0x0D 0x00`, jamais supposé.
 
 ### 5.7 Sauvegarde / restauration
-- [ ] Export `.vil` : keymap, macros, tap-dance, combos, key overrides, réglages QMK, UID, versions.
-- [ ] Import `.vil` : vérification UID / dimensions, **aperçu des différences**, puis écriture en bloc
-  avec barre de progression ; import partiel possible (keymap seule).
+- [x] Export `.vil` : keymap, macros, tap-dance, combos, key overrides, réglages QMK, UID, versions.
+- [x] Import `.vil` : vérification UID / dimensions, **aperçu des différences**, puis écriture en bloc
+  avec barre de progression ; import partiel possible (keymap seule). *(écart : seules les différences sont
+  écrites, une par une, plutôt qu'un bloc ; import partiel « keymap seule » pas encore proposé)*
 - [ ] Le RGB n'est pas dans le `.vil` : export complémentaire optionnel (JSON) sans casser la compatibilité.
 - [ ] **Instantané local automatique** (IndexedDB, par UID) à chaque connexion et après chaque modification.
+  *(partiel : instantané `localStorage` avant chaque import + bouton manuel, 5 derniers gardés ; pas encore à la
+  connexion ni par UID)*
 - [ ] **Détection d'un reflash** : chaque compilation Vial remet la keymap par défaut (identifiant de build
   aléatoire). Si la keymap lue = celle par défaut et qu'un instantané plus riche existe → proposer de restaurer.
 - [x] Format validé par **un `.vil` réel exporté de Vial** : fixture `tests/fixtures/colagan-v2-default.vil`
@@ -188,7 +191,7 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
   (BigInt / texte brut) pour la lecture comme pour l'écriture.
 
 ### 5.8 Mode démo (sans clavier)
-- [ ] Le faux transport simule un Colagan (définition, keymap par défaut, RGB) : l'app est explorable sans
+- [x] Le faux transport simule un Colagan (définition, keymap par défaut, RGB) : l'app est explorable sans
   matériel, sous Firefox ou sur téléphone ; bandeau « Démo » permanent, aucune écriture réelle.
 
 ## 6. UX et design
@@ -277,7 +280,7 @@ Ouvrir le serveur Docker via l'IP du LAN (`http://192.168.x.x:5173`) **désactiv
 - [ ] Dépôt `colagan-configurator` initialisé (Vite + TS, lint, tests, CI, Pages).
 - [ ] Environnement Docker complet (dev, outils, E2E, image nginx de prod) décrit au §7 bis.
 - [ ] App publiée sur GitHub Pages, testée sur le vrai clavier sous Linux et Windows (Chrome).
-- [ ] Fixture `.vil` réelle + faux clavier pour les tests.
+- [x] Fixture `.vil` réelle + faux clavier pour les tests.
 - [ ] README et ce SPEC à jour (cases cochées, écarts documentés).
 
 ## 11. Décisions complémentaires (05/11/2026)

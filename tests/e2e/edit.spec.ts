@@ -63,7 +63,7 @@ test('saisie avancée et keycode masqué', async ({ page }) => {
   await expect(key(page, '5,0')).toContainText('1');
 });
 
-test('QK_BOOT demande confirmation et le firmware verrouillé le refuse', async ({ page }) => {
+test('QK_BOOT demande confirmation puis le déverrouillage du clavier', async ({ page }) => {
   await key(page, '5,0').click();
   await page.locator('[data-category="boot"]').click();
   await page.locator('[data-keycode="QK_BOOT"]').click();
@@ -72,8 +72,15 @@ test('QK_BOOT demande confirmation et le firmware verrouillé le refuse', async 
   await dialog.getByRole('button', { name: 'Annuler' }).click();
   await expect(page.locator('#key-details')).toContainText('KC_6');
 
+  // déverrouillage abandonné : rien n'est écrit
   await page.locator('[data-keycode="QK_BOOT"]').click();
   await page.getByRole('button', { name: 'Affecter quand même' }).click();
-  await expect(page.locator('#edit-status')).toContainText('déverrouiller');
-  await expect(page.locator('#key-details')).toContainText('KC_NO');
+  await expect(page.getByRole('dialog')).toContainText('Maintenez enfoncées');
+  await page.getByRole('dialog').getByRole('button', { name: 'Annuler' }).click();
+  await expect(page.locator('#key-details')).toContainText('KC_6');
+
+  // la démo simule les touches tenues : déverrouillage en ~5 s puis QK_BOOT accepté
+  await page.locator('[data-keycode="QK_BOOT"]').click();
+  await page.getByRole('button', { name: 'Affecter quand même' }).click();
+  await expect(page.locator('#key-details')).toContainText('QK_BOOT', { timeout: 10_000 });
 });
