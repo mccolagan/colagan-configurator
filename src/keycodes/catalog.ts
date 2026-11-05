@@ -195,6 +195,13 @@ export class KeycodeCatalog {
     return this.byValue.get(code);
   }
 
+  /** Keycode masqué (LSFT(kc), LT2(kc)…) : entrée externe et keycode interne ; undefined sinon. */
+  masked(code: number): { readonly outer: KeycodeEntry; readonly inner: number } | undefined {
+    if (!MASKED.has(code & 0xff00)) return undefined;
+    const outer = this.byValue.get(code & 0xff00);
+    return outer ? { outer, inner: code & 0xff } : undefined;
+  }
+
   /** Libellé affiché sur la touche (libellés Vial ; « LSft (kc) » + touche interne pour les masqués). */
   label(code: number): string {
     if (MASKED.has(code & 0xff00)) {

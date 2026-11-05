@@ -225,3 +225,166 @@ svg.keyboard {
   margin: 12px 0 0;
   color: var(--muted);
 }
+
+.topbar__prefs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.toolbar .tabs {
+  margin-bottom: 0;
+}
+
+.history {
+  display: flex;
+  gap: 6px;
+}
+
+.history button {
+  padding: 6px 12px;
+}
+
+.key text.key__shift,
+.key text.key__altgr {
+  fill: var(--muted);
+}
+
+.edit-status {
+  min-height: 1.5em;
+  margin: 4px 0 0;
+}
+
+button.danger {
+  background: var(--error);
+  color: var(--accent-text);
+}
+
+.picker {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.picker--disabled .picker__grid {
+  opacity: 0.55;
+}
+
+.picker__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.picker__tools input {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.picker__search {
+  flex: 1 1 220px;
+}
+
+.picker__advanced {
+  display: flex;
+  flex: 1 1 320px;
+  gap: 6px;
+}
+
+.picker__advanced input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, monospace;
+}
+
+.picker__advanced button {
+  padding: 6px 12px;
+}
+
+.picker__mask {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.picker__mask button {
+  margin-left: 8px;
+  padding: 2px 10px;
+}
+
+.picker__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+button.keycode {
+  min-height: 44px;
+  padding: 4px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+button.keycode:hover,
+button.keycode:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+button.keycode--risky {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.picker__message:empty {
+  display: none;
+}
+
+.picker__message[data-level='error'] {
+  color: var(--error);
+}
+
+.picker__empty {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
+dialog.confirm {
+  max-width: 420px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+dialog.confirm::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+dialog.confirm h2 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}

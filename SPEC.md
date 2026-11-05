@@ -131,24 +131,26 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
 - [ ] Indication des couleurs `ledmaps` de référence du profil sur les couches de jeu (lecture seule, étape 1).
 
 ### 5.3 Édition des touches
-- [ ] Clic sur une touche → sélection ; panneau de keycodes par catégories :
+- [x] Clic sur une touche → sélection ; panneau de keycodes par catégories :
   basiques, modificateurs, F-keys, navigation, pavé num, médias / système, souris, **couches**
   (`MO`, `TO`, `TG`, `OSL`, `LT(n, kc)`, `MT(mod, kc)`), **RGB** (`RM_*`), **système** (`QK_BOOT`, `EE_CLR`),
   **utilisateur** (`customKeycodes`, dont `SEL x3`), macros `M0..`, tap-dance `TD(n)`.
-- [ ] Recherche par nom ou par caractère tapé (« ù » trouve `KC_QUOT` en AZERTY).
-- [ ] Saisie avancée : keycode QMK brut (`LT(2, KC_SPC)`, `0x5225`) avec validation.
-- [ ] Écriture immédiate (`0x05`), relecture de contrôle, mise à jour du dessin ; échec → retour arrière + erreur.
+- [x] Recherche par nom ou par caractère tapé (« ù » trouve `KC_QUOT` en AZERTY).
+- [x] Saisie avancée : keycode QMK brut (`LT(2, KC_SPC)`, `0x5225`) avec validation.
+- [x] Écriture immédiate (`0x05`), relecture de contrôle, mise à jour du dessin ; échec → retour arrière + erreur.
 - [ ] **Annuler / rétablir** sur toute la session (touches, macros, tap-dance, combos) ; l'annulation réécrit
-  l'ancienne valeur dans le clavier.
+  l'ancienne valeur dans le clavier. *(fait pour les touches ; macros, tap-dance et combos à brancher)*
 - [ ] *(reporté, cf. §12)* Glisser-déposer d'une touche sur une autre (échange) et copier / coller d'une couche entière.
 - [ ] Garde-fous : impossible de retirer **la dernière touche** permettant de quitter une couche de jeu
   (`SEL x3`, `TO(0)`, `MO`…) sans avertissement ; `QK_BOOT` signalé comme « fige le clavier ».
+  *(fait : confirmation pour `QK_BOOT` / `QK_CLEAR_EEPROM`, refus du firmware verrouillé signalé ; reste la
+  dernière touche de sortie d'une couche de jeu)*
 
 ### 5.4 Étiquettes AZERTY
-- [ ] Table de correspondance keycode → caractère AZERTY FR (dont `KC_Q`→a, `KC_W`→z, `KC_SCLN`→m,
+- [x] Table de correspondance keycode → caractère AZERTY FR (dont `KC_Q`→a, `KC_W`→z, `KC_SCLN`→m,
   `KC_M`→, , `KC_LBRC`→^, `KC_QUOT`→ù, `KC_GRV`→², `KC_NUBS`→<, rangée des chiffres & é " ' ( - è _ ç à ) =).
-- [ ] Combinaisons Shift et AltGr affichées en petit (ex. `KC_2` : é / 2 / ~).
-- [ ] Bascule AZERTY / QWERTY (noms QMK) mémorisée localement ; info-bulle avec le nom QMK exact.
+- [x] Combinaisons Shift et AltGr affichées en petit (ex. `KC_2` : é / 2 / ~).
+- [x] Bascule AZERTY / QWERTY (noms QMK) mémorisée localement ; info-bulle avec le nom QMK exact.
 
 ### 5.5 RGB en direct
 - [ ] Lecture du mode courant et de la liste des effets supportés à la connexion.

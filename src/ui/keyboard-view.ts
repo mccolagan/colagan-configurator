@@ -1,5 +1,6 @@
 // Dessin SVG du clavier à partir de la géométrie KLE (pouces tournés, touches 1,5U).
 import { layoutBounds, type KeyGeometry } from '../keyboard/kle';
+import type { KeyLabel } from '../keycodes/labels';
 
 const UNIT = 56;
 const GAP = 4;
@@ -9,7 +10,7 @@ export type KeyKind = 'normal' | 'transparent' | 'none';
 
 export interface KeyView {
   readonly geometry: KeyGeometry;
-  readonly label: string;
+  readonly label: KeyLabel;
   readonly title: string;
   readonly kind: KeyKind;
 }
@@ -25,26 +26,44 @@ function svg<K extends keyof SVGElementTagNameMap>(
   return element;
 }
 
-function addLabel(group: SVGGElement, label: string, k: KeyGeometry): void {
-  const lines = label.split('\n').filter((line) => line !== '');
+function addText(
+  group: SVGGElement,
+  lines: readonly string[],
+  x: number,
+  y: number,
+  fontSize: number,
+  className?: string,
+): void {
+  const text = svg('text', {
+    x,
+    y: y - ((lines.length - 1) * fontSize * 1.1) / 2,
+    'font-size': fontSize.toFixed(1),
+    'text-anchor': 'middle',
+    'dominant-baseline': 'central',
+    ...(className ? { class: className } : {}),
+  });
+  lines.forEach((line, i) => {
+    const tspan = svg('tspan', { x, dy: i === 0 ? 0 : (fontSize * 1.1).toFixed(1) });
+    tspan.textContent = line;
+    text.append(tspan);
+  });
+  group.append(text);
+}
+
+function addLabel(group: SVGGElement, label: KeyLabel, k: KeyGeometry): void {
+  const lines = label.main.split('\n').filter((line) => line !== '');
   const longest = Math.max(1, ...lines.map((line) => line.length));
   const width = k.w * UNIT - GAP * 2;
   const fontSize = Math.max(8, Math.min(15, (width / longest) * 1.6, 34 / Math.max(1, lines.length)));
   const cx = (k.x + k.w / 2) * UNIT;
   const cy = (k.y + k.h / 2) * UNIT;
-  const text = svg('text', {
-    x: cx,
-    y: cy - ((lines.length - 1) * fontSize * 1.1) / 2,
-    'font-size': fontSize.toFixed(1),
-    'text-anchor': 'middle',
-    'dominant-baseline': 'central',
-  });
-  lines.forEach((line, i) => {
-    const tspan = svg('tspan', { x: cx, dy: i === 0 ? 0 : (fontSize * 1.1).toFixed(1) });
-    tspan.textContent = line;
-    text.append(tspan);
-  });
-  group.append(text);
+  addText(group, lines, cx, cy, fontSize);
+  // Shift en haut à gauche, AltGr en bas à droite, comme sur les touches imprimées
+  const corner = UNIT * 0.24;
+  if (label.shift) addText(group, [label.shift], k.x * UNIT + corner, k.y * UNIT + corner, 13, 'key__shift');
+  if (label.altgr) {
+    addText(group, [label.altgr], (k.x + k.w) * UNIT - corner, (k.y + k.h) * UNIT - corner, 13, 'key__altgr');
+  }
 }
 
 export interface KeyboardViewOptions {

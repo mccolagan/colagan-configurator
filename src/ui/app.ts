@@ -1,14 +1,19 @@
 import { createDemoKeyboard } from '../demo/demo-keyboard';
 import { detectHidSupport, type HidSupport } from '../env/support';
+import { readLabelLayout, saveLabelLayout } from '../env/label-layout';
 import { applyTheme, readTheme, type ThemeChoice } from '../env/theme';
+import { KeyEditor, type KeyChange } from '../editor/key-editor';
 import { t, type MessageKey } from '../i18n';
 import { KeycodeCatalog } from '../keycodes/catalog';
+import { flatLabel, keyLabel, type LabelLayout } from '../keycodes/labels';
 import { parseKle, type KeyGeometry } from '../keyboard/kle';
 import { layerName, profileFor, type KeyboardProfile } from '../profiles';
 import { KeyboardClient } from '../protocol/client';
 import type { Transport } from '../protocol/packet';
 import { HidTransport } from '../transport/hid-transport';
+import { confirmDialog } from './confirm';
 import { keyId, renderKeyboard, type KeyView } from './keyboard-view';
+import { KeycodePicker, RISKY_KEYCODES } from './keycode-picker';
 
 // Interface raw HID de VIA / Vial
 const RAW_HID_FILTER: HIDDeviceFilter = { usagePage: 0xff60, usage: 0x61 };
@@ -26,6 +31,17 @@ interface Session {
   readonly profile: KeyboardProfile | undefined;
   readonly demo: boolean;
   readonly device?: HIDDevice;
+  readonly editor: KeyEditor;
+}
+
+interface WorkspaceView {
+  readonly tabs: HTMLElement;
+  readonly frame: HTMLElement;
+  readonly details: HTMLElement;
+  readonly editStatus: HTMLElement;
+  readonly undo: HTMLButtonElement;
+  readonly redo: HTMLButtonElement;
+  picker: KeycodePicker;
 }
 
 type Level = 'ok' | 'warn' | 'error' | 'info';
@@ -34,6 +50,8 @@ export class App {
   private session: Session | undefined;
   private layer = 0;
   private selected: { row: number; col: number } | undefined;
+  private layout: LabelLayout = readLabelLayout();
+  private view: WorkspaceView | undefined;
   private readonly support = detectHidSupport(window);
 
   constructor(private readonly root: HTMLElement) {}
@@ -41,6 +59,9 @@ export class App {
   start(): void {
     applyTheme(readTheme());
     this.renderShell();
+    document.addEventListener('keydown', (event) => {
+      this.onShortcut(event);
+    });
     if (this.support === 'ok') {
       navigator.hid.addEventListener('disconnect', (event) => {
         if (this.session?.device === event.device) {
@@ -74,6 +95,13 @@ export class App {
             <h1>${t('app.title')}</h1>
             <p>${t('app.subtitle')}</p>
           </div>
+          <div class="topbar__prefs">
+          <label>${t('labels.label')}
+            <select id="labels">
+              <option value="azerty">${t('labels.azerty')}</option>
+              <option value="qwerty">${t('labels.qwerty')}</option>
+            </select>
+          </label>
           <label>${t('theme.label')}
             <select id="theme">
               <option value="auto">${t('theme.auto')}</option>
@@ -81,6 +109,7 @@ export class App {
               <option value="dark">${t('theme.dark')}</option>
             </select>
           </label>
+          </div>
         </header>
         <section class="panel">
           <p class="status" id="support" data-level="${support.level}">${t(support.key)}</p>
@@ -97,6 +126,13 @@ export class App {
     themeSelect.value = readTheme();
     themeSelect.addEventListener('change', () => {
       applyTheme(themeSelect.value as ThemeChoice);
+    });
+    const labelsSelect = this.element('#labels') as HTMLSelectElement;
+    labelsSelect.value = this.layout;
+    labelsSelect.addEventListener('change', () => {
+      this.layout = labelsSelect.value === 'qwerty' ? 'qwerty' : 'azerty';
+      saveLabelLayout(this.layout);
+      this.renderWorkspace();
     });
     this.element('#connect').addEventListener('click', () => void this.connect());
     this.element('#demo').addEventListener('click', () => void this.startDemo());
@@ -165,6 +201,7 @@ export class App {
       profile: profileFor(info.uid),
       demo,
       ...(device ? { device } : {}),
+      editor: new KeyEditor(client),
     };
     this.layer = 0;
     this.selected = undefined;
@@ -179,13 +216,14 @@ export class App {
     this.renderWorkspace();
   }
 
+  /** Construit l'espace de travail d'une session (le panneau de keycodes garde sa recherche entre deux rendus). */
   private renderWorkspace(): void {
     const workspace = this.element('#workspace');
     const session = this.session;
     workspace.hidden = !session;
     workspace.replaceChildren();
+    this.view = undefined;
     if (!session) return;
-    const { client, catalog, keys, profile } = session;
 
     if (session.demo) {
       const banner = document.createElement('p');
@@ -194,60 +232,213 @@ export class App {
       workspace.append(banner);
     }
 
+    const toolbar = document.createElement('div');
+    toolbar.className = 'toolbar';
     const tabs = document.createElement('div');
     tabs.className = 'tabs';
     tabs.setAttribute('role', 'tablist');
     tabs.setAttribute('aria-label', t('layers.label'));
-    for (let layer = 0; layer < client.info.layers; layer++) {
-      const tab = document.createElement('button');
-      tab.type = 'button';
-      tab.setAttribute('role', 'tab');
-      tab.setAttribute('aria-selected', String(layer === this.layer));
-      tab.textContent = `${String(layer)} · ${layerName(profile, layer)}`;
-      tab.addEventListener('click', () => {
-        this.layer = layer;
-        this.renderWorkspace();
-      });
-      tabs.append(tab);
-    }
+    const history = document.createElement('div');
+    history.className = 'history';
+    const undo = this.button(t('edit.undo'), 'Ctrl+Z', () => void this.undo());
+    undo.id = 'undo';
+    const redo = this.button(t('edit.redo'), 'Ctrl+Maj+Z', () => void this.redo());
+    redo.id = 'redo';
+    history.append(undo, redo);
+    toolbar.append(tabs, history);
+
+    const frame = document.createElement('div');
+    frame.className = 'keyboard-frame';
+    const details = document.createElement('p');
+    details.className = 'key-details';
+    details.id = 'key-details';
+    const editStatus = document.createElement('p');
+    editStatus.className = 'status edit-status';
+    editStatus.id = 'edit-status';
+    editStatus.setAttribute('role', 'status');
+    editStatus.setAttribute('aria-live', 'polite');
+
+    const picker = this.createPicker(session);
+    workspace.append(toolbar, frame, details, editStatus, picker.element);
+    this.view = { tabs, frame, details, editStatus, undo, redo, picker };
+    this.refresh();
+  }
+
+  private createPicker(session: Session): KeycodePicker {
+    return new KeycodePicker({
+      catalog: session.catalog,
+      layout: this.layout,
+      onPick: (code) => void this.assign(code),
+    });
+  }
+
+  private button(label: string, shortcut: string, onClick: () => void): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = label;
+    button.title = `${label} (${shortcut})`;
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  /** Met à jour onglets, dessin, détails et boutons à partir de l'état courant. */
+  private refresh(): void {
+    const session = this.session;
+    const view = this.view;
+    if (!session || !view) return;
+    const { client, catalog, keys, profile, editor } = session;
+
+    view.tabs.replaceChildren(
+      ...Array.from({ length: client.info.layers }, (_, layer) => {
+        const tab = document.createElement('button');
+        tab.type = 'button';
+        tab.setAttribute('role', 'tab');
+        tab.setAttribute('aria-selected', String(layer === this.layer));
+        tab.textContent = `${String(layer)} · ${layerName(profile, layer)}`;
+        tab.addEventListener('click', () => {
+          this.layer = layer;
+          this.refresh();
+        });
+        return tab;
+      }),
+    );
 
     const views: KeyView[] = keys.map((geometry) => {
       const code = client.getKey(this.layer, geometry.row, geometry.col);
       return {
         geometry,
-        label: catalog.label(code),
+        label: keyLabel(catalog, code, this.layout),
         title: catalog.tooltip(code),
         kind: code === 0 ? 'none' : code === 1 ? 'transparent' : 'normal',
       };
     });
     const selected = this.selected ? keyId(this.selected.row, this.selected.col) : undefined;
-    const drawing = renderKeyboard({
-      keys: views,
-      ...(selected ? { selected } : {}),
-      onSelect: (row, col) => {
-        this.selected = { row, col };
-        this.renderWorkspace();
-        this.root.querySelector<SVGGElement>(`[data-key="${keyId(row, col)}"]`)?.focus();
-      },
-    });
-    const frame = document.createElement('div');
-    frame.className = 'keyboard-frame';
-    frame.append(drawing);
+    view.frame.replaceChildren(
+      renderKeyboard({
+        keys: views,
+        ...(selected ? { selected } : {}),
+        onSelect: (row, col) => {
+          this.selected = { row, col };
+          this.refresh();
+          this.root.querySelector<SVGGElement>(`[data-key="${keyId(row, col)}"]`)?.focus();
+        },
+      }),
+    );
 
-    const details = document.createElement('p');
-    details.className = 'key-details';
-    details.id = 'key-details';
     if (this.selected) {
       const code = client.getKey(this.layer, this.selected.row, this.selected.col);
-      details.textContent = t('key.selected', {
+      view.details.textContent = t('key.selected', {
         layer: layerName(profile, this.layer),
         position: keyId(this.selected.row, this.selected.col),
         name: catalog.tooltip(code),
       });
     } else {
-      details.textContent = t('key.none');
+      view.details.textContent = t('key.none');
     }
+    view.undo.disabled = !editor.canUndo;
+    view.redo.disabled = !editor.canRedo;
+    view.picker.setEnabled(Boolean(this.selected));
+  }
 
-    workspace.append(tabs, frame, details);
+  private editStatus(level: Level, message: string): void {
+    if (!this.view) return;
+    this.view.editStatus.dataset.level = level;
+    this.view.editStatus.textContent = message;
+  }
+
+  private describe(change: Pick<KeyChange, 'layer' | 'row' | 'col'>, code: number): Record<string, string> {
+    const session = this.session;
+    return {
+      layer: layerName(session?.profile, change.layer),
+      position: keyId(change.row, change.col),
+      name: session
+        ? `${flatLabel(keyLabel(session.catalog, code, this.layout))} (${session.catalog.serialize(code)})`
+        : '',
+    };
+  }
+
+  private async assign(code: number): Promise<void> {
+    const session = this.session;
+    const target = this.selected;
+    if (!session || !target) return;
+    const { catalog, editor } = session;
+    const name = catalog.serialize(code);
+    if (RISKY_KEYCODES.has(name)) {
+      const body = name === 'QK_BOOT' ? t('edit.confirmBoot') : t('edit.confirmClear');
+      if (!(await confirmDialog(t('edit.confirmTitle', { name }), body))) return;
+    }
+    const position = { layer: this.layer, row: target.row, col: target.col };
+    try {
+      const result = await editor.assign(position.layer, position.row, position.col, code);
+      if (result.stored !== result.requested) {
+        this.editStatus(
+          'warn',
+          name === 'QK_BOOT'
+            ? t('edit.bootLocked')
+            : t('edit.replaced', { requested: name, stored: catalog.serialize(result.stored) }),
+        );
+      } else {
+        this.editStatus('ok', t('edit.written', this.describe(position, result.stored)));
+      }
+    } catch (error) {
+      this.editStatus(
+        'error',
+        t('edit.error', { message: error instanceof Error ? error.message : String(error) }),
+      );
+    }
+    this.refresh();
+  }
+
+  private async undo(): Promise<void> {
+    await this.travel('undo');
+  }
+
+  private async redo(): Promise<void> {
+    await this.travel('redo');
+  }
+
+  private async travel(direction: 'undo' | 'redo'): Promise<void> {
+    const session = this.session;
+    if (!session) return;
+    try {
+      const change = await (direction === 'undo' ? session.editor.undo() : session.editor.redo());
+      if (change) {
+        // on affiche la couche concernée pour que l'effet soit visible
+        this.layer = change.layer;
+        this.selected = { row: change.row, col: change.col };
+        const code = direction === 'undo' ? change.before : change.after;
+        this.editStatus(
+          'info',
+          t(direction === 'undo' ? 'edit.undone' : 'edit.redone', this.describe(change, code)),
+        );
+      }
+    } catch (error) {
+      this.editStatus(
+        'error',
+        t('edit.error', { message: error instanceof Error ? error.message : String(error) }),
+      );
+    }
+    this.refresh();
+  }
+
+  private onShortcut(event: KeyboardEvent): void {
+    if (!this.session || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const target = event.target;
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement
+    ) {
+      return;
+    }
+    const key = event.key.toLowerCase();
+    if (key === 'z' && !event.shiftKey) {
+      event.preventDefault();
+      void this.undo();
+    } else if ((key === 'z' && event.shiftKey) || key === 'y') {
+      event.preventDefault();
+      void this.redo();
+    }
   }
 }
