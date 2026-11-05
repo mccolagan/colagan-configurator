@@ -1,0 +1,7 @@
+# Dev (chargé automatiquement) : serveur Vite avec HMR.
+# Port publié sur 127.0.0.1 : WebHID n'existe que sur https:// ou http://localhost.
+services:
+  app:
+    command: sh -c "npm ci --no-audit --no-fund && npm run dev"
+    ports:
+      - '127.0.0.1:${DEV_PORT:-5173}:5173'

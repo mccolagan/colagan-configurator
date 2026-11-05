@@ -1,0 +1,35 @@
+name: colagan-configurator
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: .docker/node/Dockerfile
+    image: colagan-configurator-node:dev
+    user: '${HOST_UID:-1000}:${HOST_GID:-1000}'
+    working_dir: /app
+    environment:
+      BASE_PATH: ${BASE_PATH:-/}
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+
+  e2e:
+    profiles: ['e2e']
+    build:
+      context: .
+      dockerfile: .docker/playwright/Dockerfile
+    image: colagan-configurator-playwright:dev
+    user: '${HOST_UID:-1000}:${HOST_GID:-1000}'
+    working_dir: /app
+    environment:
+      CI: ${CI:-}
+      HOME: /tmp
+    volumes:
+      - .:/app
+      - node_modules_e2e:/app/node_modules
+    command: sh -c "npm ci --no-audit --no-fund && npx playwright test"
+
+volumes:
+  node_modules:
+  node_modules_e2e:

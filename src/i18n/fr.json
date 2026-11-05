@@ -1,0 +1,16 @@
+{
+  "app.title": "Colagan Configurator",
+  "app.subtitle": "Configuration du clavier split Colagan V2 (Vial)",
+  "theme.label": "Thème",
+  "theme.auto": "Automatique",
+  "theme.light": "Clair",
+  "theme.dark": "Sombre",
+  "support.ok": "Votre navigateur peut communiquer avec le clavier.",
+  "support.noWebhid": "Ce navigateur ne permet pas d'accéder au clavier (WebHID). Utilisez Chrome ou Edge.",
+  "support.insecure": "Page ouverte hors contexte sécurisé : l'accès au clavier est bloqué. Ouvrez-la via https:// ou http://localhost (pas par l'adresse IP du réseau).",
+  "connect.button": "Connecter le clavier",
+  "connect.none": "Aucun clavier sélectionné.",
+  "connect.opened": "Connecté à « {name} » ({vid}:{pid}).",
+  "connect.error": "Impossible d'ouvrir le clavier : {message}",
+  "connect.linuxHint": "Sous Linux, vérifiez la règle udev donnant accès à /dev/hidraw* (voir le README)."
+}

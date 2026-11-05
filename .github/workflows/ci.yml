@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Mêmes images Docker qu'en local ; conteneurs en root car le workspace du runner n'appartient pas à l'UID 1000.
+env:
+  HOST_UID: '0'
+  HOST_GID: '0'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint, types, tests unitaires, build
+        run: docker compose -f docker-compose.yml run --rm app sh -c "npm ci --no-audit --no-fund && npm run lint && npm test && npm run build"
+      - name: Tests E2E (Playwright)
+        run: docker compose -f docker-compose.yml --profile e2e run --rm -e CI=true e2e
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pour GitHub Pages
+        run: docker compose -f docker-compose.yml run --rm -e BASE_PATH=/colagan-configurator/ app sh -c "npm ci --no-audit --no-fund && npm run build"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
