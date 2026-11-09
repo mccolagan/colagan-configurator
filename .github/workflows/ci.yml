@@ -30,7 +30,7 @@ jobs:
         run: docker compose -f docker-compose.yml --profile e2e run --rm -e CI=true e2e
 
   deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: check
     runs-on: ubuntu-latest
     permissions:
