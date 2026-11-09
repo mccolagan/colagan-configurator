@@ -6,3 +6,5 @@ package-lock.json
 SPEC.md
 src/keycodes/vial-v6.generated.ts
 tests/fixtures
+# Maquette 3D autonome (prototype de design, hors code de l'application)
+public/maquette-3d.html
