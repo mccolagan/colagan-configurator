@@ -25,6 +25,9 @@ const CATEGORIES: readonly Category[] = [
 
 const SEARCH_LIMIT = 120;
 
+/** Type des données glissées depuis la grille (valeur numérique du keycode). */
+export const KEYCODE_MIME = 'application/x-colagan-keycode';
+
 /** Keycodes qui figent ou effacent le clavier : confirmation avant affectation. */
 export const RISKY_KEYCODES: ReadonlySet<string> = new Set(['QK_BOOT', 'QK_CLEAR_EEPROM']);
 
@@ -42,6 +45,7 @@ export class KeycodePicker {
   private query = '';
   private pendingMask: KeycodeEntry | undefined;
   private enabled = false;
+  private current: number | undefined;
   private readonly grid: HTMLElement;
   private readonly categoryBar: HTMLElement;
   private readonly maskBanner: HTMLElement;
@@ -61,7 +65,7 @@ export class KeycodePicker {
         </form>
       </div>
       <p class="picker__mask" hidden></p>
-      <div class="tabs picker__categories" role="tablist" aria-label="${t('picker.categories')}"></div>
+      <div class="picker__categories" role="group" aria-label="${t('picker.categories')}"></div>
       <div class="picker__grid"></div>
       <p class="picker__message" role="status" aria-live="polite"></p>`;
     this.search = this.query$('.picker__search') as HTMLInputElement;
@@ -88,6 +92,15 @@ export class KeycodePicker {
     this.element.classList.toggle('picker--disabled', !enabled);
     if (!enabled) this.pendingMask = undefined;
     this.render();
+  }
+
+  /** Keycode de la touche sélectionnée, mis en évidence dans la grille. */
+  setCurrent(code: number | undefined): void {
+    if (code === this.current) return;
+    this.current = code;
+    for (const button of this.grid.querySelectorAll<HTMLElement>('.keycode')) {
+      button.classList.toggle('is-cur', code !== undefined && button.dataset.value === String(code));
+    }
   }
 
   private query$(selector: string): HTMLElement {
@@ -198,8 +211,8 @@ export class KeycodePicker {
       ...CATEGORIES.map((category) => {
         const tab = document.createElement('button');
         tab.type = 'button';
-        tab.setAttribute('role', 'tab');
-        tab.setAttribute('aria-selected', String(category.id === this.category));
+        tab.className = 'cat';
+        tab.setAttribute('aria-pressed', String(category.id === this.category));
         tab.dataset.category = category.id;
         tab.textContent = t(category.label);
         tab.addEventListener('click', () => {
@@ -218,10 +231,27 @@ export class KeycodePicker {
         button.className = 'keycode';
         if (RISKY_KEYCODES.has(entry.id)) button.classList.add('keycode--risky');
         button.dataset.keycode = entry.id;
-        button.textContent = entry.masked
+        button.dataset.value = String(entry.value);
+        if (entry.value === this.current && !entry.masked) button.classList.add('is-cur');
+        const main = document.createElement('span');
+        main.className = 'm';
+        main.textContent = entry.masked
           ? entry.label.replaceAll('\n', ' ')
           : flatLabel(keyLabel(catalog, entry.value, layout)) || entry.id;
+        const code = document.createElement('span');
+        code.className = 'c';
+        code.textContent = entry.id.replace(/^KC_/, '');
+        button.append(main, code);
         button.title = entry.tooltip ? `${entry.id} : ${entry.tooltip}` : entry.id;
+        if (!entry.masked && !this.pendingMask) {
+          // glisser un keycode sur une touche du clavier l'y affecte
+          button.draggable = true;
+          button.addEventListener('dragstart', (event) => {
+            event.dataTransfer?.setData(KEYCODE_MIME, String(entry.value));
+            event.dataTransfer?.setData('text/plain', entry.id);
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy';
+          });
+        }
         button.addEventListener('click', () => {
           this.pick(entry);
         });

@@ -8,7 +8,11 @@ test.beforeEach(async ({ page }) => {
   await page.getByRole('button', { name: 'Essayer sans clavier (démo)' }).click();
 });
 
+const display = (page: import('@playwright/test').Page) =>
+  page.getByRole('button', { name: 'Affichage' }).click();
+
 test('« Couche affichée » montre les couleurs de la couche sélectionnée', async ({ page }) => {
+  await display(page);
   await expect(page.getByRole('radio', { name: 'Couche affichée' })).toHaveAttribute('aria-checked', 'true');
   // BASE : touches transparentes, l'effet réel du clavier passe à travers
   await expect(led(page, '5,0')).toHaveAttribute('data-led', 'on');
@@ -21,6 +25,7 @@ test('« Couche affichée » montre les couleurs de la couche sélectionnée', a
 });
 
 test('« Clavier en direct » montre la couche active du clavier, pas celle du site', async ({ page }) => {
+  await display(page);
   await page.getByRole('radio', { name: 'Clavier en direct' }).click();
   await page.getByRole('tab', { name: '2 · FPS' }).click();
   await expect(led(page, '5,0')).toHaveAttribute('data-led', 'on');
@@ -29,12 +34,14 @@ test('« Clavier en direct » montre la couche active du clavier, pas celle du s
 });
 
 test("« Masqué » retire l'éclairage, et le choix est gardé d'une visite à l'autre", async ({ page }) => {
+  await display(page);
   await page.getByRole('radio', { name: 'Masqué' }).click();
   await expect(led(page, '5,0')).toHaveAttribute('data-led', '');
   await expect(page.locator('#led-status')).toHaveText('Aperçu des LED désactivé.');
 
   await page.reload();
   await page.getByRole('button', { name: 'Essayer sans clavier (démo)' }).click();
+  await display(page);
   await expect(page.getByRole('radio', { name: 'Masqué' })).toHaveAttribute('aria-checked', 'true');
   await expect(led(page, '5,0')).toHaveAttribute('data-led', '');
 });

@@ -6,7 +6,7 @@ const led = (page: import('@playwright/test').Page, id: string) =>
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Essayer sans clavier (démo)' }).click();
-  await page.getByRole('radio', { name: 'Couleurs' }).click();
+  await page.getByRole('tab', { name: 'Lumière' }).click();
   await page.getByRole('tab', { name: '2 · FPS' }).click();
 });
 
@@ -25,7 +25,7 @@ test('peindre une touche, annuler, rétablir, pipette', async ({ page }) => {
 
   // Alt+clic : le pinceau reprend le jaune de Tab
   await page.locator('[data-key="5,5"]').click({ modifiers: ['Alt'] });
-  await expect(page.locator('#brush-current')).toHaveText('Pinceau : #FFFF00');
+  await expect(page.locator('#brush-current')).toHaveText('#FFFF00');
 });
 
 test('glisser peint plusieurs touches en une seule action annulable', async ({ page }) => {
@@ -43,6 +43,17 @@ test('glisser peint plusieurs touches en une seule action annulable', async ({ p
   await page.locator('#undo').click();
   await expect(led(page, '6,0')).toHaveCSS('fill', 'rgb(255, 0, 0)');
   await expect(led(page, '6,1')).toHaveCSS('fill', 'rgb(255, 255, 0)');
+});
+
+test('remplir la couche puis tout rendre transparent, en une action annulable chacun', async ({ page }) => {
+  await page.getByRole('radio', { name: 'Rouge' }).click();
+  await page.locator('#colors-fill').click();
+  await expect(page.locator('#edit-status')).toContainText('58 touche(s) peinte(s) sur FPS');
+  await expect(led(page, '9,4')).toHaveCSS('fill', 'rgb(255, 0, 0)');
+  await page.locator('#colors-clear').click();
+  await expect(led(page, '9,4')).toHaveAttribute('data-led', /on|effect/);
+  await page.locator('#undo').click();
+  await expect(led(page, '9,4')).toHaveCSS('fill', 'rgb(255, 0, 0)');
 });
 
 test('effet propre à une couche, puis retour aux valeurs par défaut', async ({ page }) => {

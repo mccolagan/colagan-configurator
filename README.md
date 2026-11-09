@@ -1,27 +1,35 @@
-# Colagan Configurator
+# Colagan Studio (configurateur)
 
-Configurateur web du clavier split **Colagan V2** (firmware Vial) : touches et éclairage de chaque couche sur
-une même page, aperçu des LED en direct, macros / tap-dance / combos, sauvegarde / restauration `.vil`.
-Communique avec le clavier depuis le navigateur via **WebHID**.
+Configurateur web du clavier split **Colagan V2** (firmware Vial) : scène 3D plein écran façon photo produit,
+touches et éclairage de chaque couche, aperçu des LED en direct, macros / tap-dance / combos, sauvegarde /
+restauration `.vil`. Communique avec le clavier depuis le navigateur via **WebHID**.
 
 Cahier des charges et avancement : [`SPEC.md`](SPEC.md). Firmware : dépôt `colagan-pico-split-keyboard`.
 
 ## Fonctions
 
-- **Touches** : onglets de couche, dessin du clavier (pouces en arc), choix du keycode avec étiquettes AZERTY
-  (ou QWERTY), écriture immédiate, annuler / rétablir, garde-fous (QK_BOOT, dernière sortie d'une couche).
-- **Couleurs** (même page, mode _Couleurs_) : pinceau (palette, couleur libre, éteinte, « Effet »), clic ou
-  glisser pour peindre, Alt+clic pour reprendre une couleur, effet propre à une couche, effet global sur la
-  couche 0. Pendant l'édition, le clavier affiche la couche choisie.
-- **Éclairage sur le dessin** : _Couche affichée_ (couleurs de la couche sélectionnée, effet réel sous les touches
-  « Effet »), _Clavier en direct_ (état réel des LED, ~20 i/s), ou _Masqué_. L'onglet de la couche active sur le
-  clavier est marqué ●.
-- **Vue 3D** (par défaut, _Vue : 3D / Plan_) : keycaps aux légendes rétroéclairées par les LED réelles, coque
-  noir mat au contour du PCB (profil Colagan), vues _Produit_ / _Dessus_, mêmes clics et glisser que le plan.
-  three.js est chargé à la demande ; sans WebGL, le plan SVG reste affiché. Maquette de design :
+- **Interface** (design sobre façon Apple, thèmes clair / sombre) : vues en haut (_Produit_, _Dessus_,
+  _Éclaté_, _Rayons X_, _Couches_, _Plan_), rail des couches à gauche (teinte, accès lu dans la keymap,
+  mini-carte), inspecteur à droite (_Touches_, _Lumière_, _Macros & co_, _Essai_), pastille de connexion
+  (informations et sauvegarde), fenêtre _Affichage_, palette de commandes `Ctrl+K`.
+- **Touches** : clic sur une touche (3D ou plan) ou keycode glissé dessus, étiquettes AZERTY (ou QWERTY),
+  écriture immédiate, annuler / rétablir, garde-fous (QK_BOOT, dernière sortie d'une couche).
+- **Lumière** : pinceau (palette, couleur libre, éteinte, transparente), clic ou glisser pour peindre,
+  Alt+clic pour reprendre une couleur, remplir / tout transparent, effet propre à une couche, effet global
+  (vignettes animées, luminosité, vitesse, teinte, saturation, interrupteur). Pendant l'édition, le clavier
+  affiche la couche choisie.
+- **Éclairage sur le dessin** (fenêtre _Affichage_) : _Couche affichée_ (couleurs de la couche sélectionnée,
+  effet réel sous les touches transparentes), _Clavier en direct_ (état réel des LED, ~20 i/s), ou _Masqué_. La
+  couche active sur le clavier est cerclée dans le rail.
+- **Vue 3D** : keycaps aux légendes rétroéclairées par les LED réelles, coque noir mat au contour du PCB,
+  vue éclatée annotée, rayons X (matrice, chaîne LED), pile des couches, géométrie du split réglable. three.js
+  est chargé à la demande ; sans WebGL, le plan SVG reste affiché. Les frappes sur le vrai clavier s'animent
+  sur la scène. Maquette d'origine :
   [`maquette-3d.html`](https://mccolagan.github.io/colagan-configurator/maquette-3d.html).
+- **Essai** : simulation des couches (MO, TO, SEL x3…) sur la keymap réelle, sans rien envoyer au clavier.
 - **Macros & co** : macros (texte converti en frappes AZERTY), tap-dance, combos.
-- **Sauvegarde** : export / import `.vil` compatible Vial, instantanés locaux avant import.
+- **Sauvegarde** (pastille de connexion) : export / import `.vil` compatible Vial, instantanés locaux avant
+  import.
 - **Mode démo** : clavier simulé, sans matériel.
 
 Couleurs par couche et aperçu : firmware Colagan avec la commande `0xC0` v2 (voir le dépôt firmware). Avec un

@@ -7,7 +7,8 @@ test.beforeEach(async ({ page }) => {
 
 test('le mode démo lit le clavier simulé et dessine les 58 touches', async ({ page }) => {
   await expect(page.locator('#connection')).toHaveText('« Colagan V2 » : 8 couches, 58 touches.');
-  await expect(page.getByText('Mode démo')).toBeVisible();
+  await expect(page.locator('#pill')).toHaveAttribute('data-state', 'demo');
+  await expect(page.locator('#pill')).toContainText('démo');
   await expect(page.locator('[data-key]')).toHaveCount(58);
   await expect(page.getByRole('tab', { name: '0 · BASE' })).toHaveAttribute('aria-selected', 'true');
   // pouce droit extérieur : touche personnalisée SEL x3, dessinée tournée

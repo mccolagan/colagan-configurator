@@ -1,19 +1,21 @@
-// Mode « Couleurs » : pinceau (couleur, éteinte ou transparente) et effet RGB de la couche affichée.
+// Onglet « Lumière » : pinceau (couleur, éteinte ou transparente) et effet RGB de la couche affichée.
 import { t, type MessageKey } from '../i18n';
 import type { LayerColor } from '../protocol/led-stream';
 import type { LayerLighting } from '../rgb/layer-lighting';
 import { RgbController } from '../rgb/rgb-controller';
 import { renderRgbPanel } from './rgb-panel';
+import { errorMessage, h } from './studio/dom';
+import type { EffectPreviews } from './studio/effect-preview';
 
-/** Palette de départ : celle des couleurs par couche du firmware (keymap.c). */
+/** Palette : celle des couleurs par couche du firmware (keymap.c), dans l'ordre de la maquette. */
 const SWATCHES: readonly (readonly [string, readonly [number, number, number]])[] = [
+  ['WHT', [255, 255, 255]],
   ['RED', [255, 0, 0]],
   ['ORG', [255, 100, 0]],
   ['YEL', [255, 255, 0]],
   ['GRN', [0, 255, 0]],
   ['BLU', [0, 0, 255]],
   ['PUR', [255, 0, 255]],
-  ['WHT', [255, 255, 255]],
   ['GRY', [50, 50, 50]],
 ];
 
@@ -22,7 +24,7 @@ export const OFF_COLOR: LayerColor = [0, 0, 0];
 export const cssColor = (c: readonly [number, number, number]): string =>
   `rgb(${String(c[0])} ${String(c[1])} ${String(c[2])})`;
 
-const hex = (c: readonly [number, number, number]): string =>
+export const hexColor = (c: readonly [number, number, number]): string =>
   `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 
 const fromHex = (value: string): [number, number, number] => [
@@ -40,50 +42,127 @@ export interface ColorPanelOptions {
   readonly layerName: string;
   readonly brush: LayerColor;
   readonly onBrush: (brush: LayerColor) => void;
-  /** Panneau de l'effet global (VialRGB), affiché sur la couche 0 ou si le firmware n'a pas les couches. */
-  readonly globalRgb: () => HTMLElement;
-  readonly globalMode: () => {
-    effect: number;
-    speed: number;
-    hue: number;
-    saturation: number;
-    value: number;
-  };
+  /** Remplit toute la couche avec une couleur (null = tout transparent). */
+  readonly onFill: (color: LayerColor) => void;
+  /** Effet global (VialRGB), absent si le clavier ne l'expose pas. */
+  readonly globalRgb: RgbController | undefined;
   readonly supportedEffects: readonly number[];
   readonly maxBrightness: number;
+  readonly previews: EffectPreviews;
+  /** Interrupteur « Éclairage allumé » : effet global différent de OFF. */
+  readonly onLightingToggle: (on: boolean) => void;
   readonly onReset: () => void;
   readonly onError: (message: string) => void;
 }
 
 export function renderColorPanel(options: ColorPanelOptions): HTMLElement {
   const { lighting, layer } = options;
-  const panel = document.createElement('section');
-  panel.className = 'color-panel';
-  panel.setAttribute('aria-label', t('colors.label'));
+  const panel = h('div', { class: 'panel-part color-panel', 'aria-label': t('colors.label') });
 
-  if (!lighting) {
-    const note = document.createElement('p');
-    note.className = 'status';
-    note.dataset.level = 'info';
-    note.textContent = t('colors.unsupported');
-    panel.append(note, effectHeading(t('effect.global'), t('effect.globalNote')), options.globalRgb());
-    return panel;
+  if (lighting) panel.append(...brushSection(options));
+  else panel.append(h('p', { class: 'hint', text: t('colors.unsupported') }));
+
+  // --- effet : celui de la couche s'il lui est propre, sinon l'effet global
+  panel.append(h('div', { class: 'h', text: t('rgb.effect') }));
+  const effect = lighting && layer > 0 ? lighting.effect(layer) : undefined;
+  const own = h('input', { type: 'checkbox', class: 'toggle', id: 'effect-own' });
+  own.checked = layer === 0 || Boolean(effect?.override);
+  own.disabled = layer === 0 || !lighting;
+  panel.append(
+    h(
+      'div',
+      { class: 'group' },
+      h('label', { class: 'item' }, h('span', { text: t('effect.ownShort') }), own),
+    ),
+  );
+
+  const lightingSwitch = h('input', { type: 'checkbox', class: 'toggle', id: 'rgb-on' });
+  const syncSwitch = (): void => {
+    lightingSwitch.checked = (options.globalRgb?.mode.effect ?? 0) !== 0;
+  };
+  lightingSwitch.addEventListener('change', () => {
+    options.onLightingToggle(lightingSwitch.checked);
+  });
+
+  if (layer > 0 && lighting && effect?.override) {
+    const controller = new RgbController({ request: () => Promise.reject(new Error('inutilisé')) }, effect, {
+      maxBrightness: options.maxBrightness,
+      persistent: true,
+      write: (mode) => lighting.setEffect(layer, { ...mode, override: true }),
+      onError: (error) => {
+        options.onError(errorMessage(error));
+      },
+    });
+    panel.append(
+      renderRgbPanel({
+        controller,
+        supportedEffects: options.supportedEffects,
+        previews: options.previews,
+        onError: options.onError,
+      }),
+    );
+  } else if (options.globalRgb) {
+    if (layer > 0) panel.append(h('p', { class: 'hint', text: t('effect.inherit') }));
+    panel.append(
+      renderRgbPanel({
+        controller: options.globalRgb,
+        supportedEffects: options.supportedEffects,
+        previews: options.previews,
+        onError: options.onError,
+        onChange: syncSwitch,
+      }),
+    );
+  } else {
+    panel.append(h('p', { class: 'hint', text: t('rgb.unsupported') }));
   }
 
-  // --- pinceau
-  const brushRow = document.createElement('div');
-  brushRow.className = 'color-panel__brush';
-  brushRow.setAttribute('role', 'radiogroup');
-  brushRow.setAttribute('aria-label', t('colors.brush'));
-  const choices: { color: LayerColor; button: HTMLButtonElement }[] = [];
-  const choice = (color: LayerColor, label: string, className: string): HTMLButtonElement => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `swatch ${className}`;
-    button.title = label;
-    button.setAttribute('aria-label', label);
-    button.setAttribute('role', 'radio');
-    if (color && className === 'swatch--color') button.style.background = cssColor(color);
+  own.addEventListener('change', () => {
+    if (!lighting) return;
+    const global = options.globalRgb?.mode ?? { effect: 0, speed: 0, hue: 0, saturation: 0, value: 0 };
+    const next = own.checked
+      ? { ...global, override: true }
+      : { ...(lighting.effect(layer) ?? global), override: false };
+    lighting.setEffect(layer, next).then(
+      () => {
+        panel.replaceWith(renderColorPanel(options));
+      },
+      (error: unknown) => {
+        options.onError(errorMessage(error));
+      },
+    );
+  });
+
+  if (options.globalRgb) {
+    syncSwitch();
+    panel.append(
+      h(
+        'div',
+        { class: 'group' },
+        h('label', { class: 'item' }, h('span', { text: t('rgb.on') }), lightingSwitch),
+      ),
+    );
+  }
+  if (lighting) {
+    const reset = h('button', { type: 'button', class: 'item', id: 'colors-reset', text: t('colors.reset') });
+    reset.addEventListener('click', options.onReset);
+    panel.append(h('div', { class: 'group' }, reset));
+  }
+  return panel;
+}
+
+function brushSection(options: ColorPanelOptions): HTMLElement[] {
+  const current = h('small', { id: 'brush-current' });
+  const swatches = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': t('colors.brush') });
+  const choices: { color: LayerColor; button: HTMLElement }[] = [];
+  const choice = (color: LayerColor, label: string, className = ''): HTMLButtonElement => {
+    const button = h('button', {
+      type: 'button',
+      class: `sw ${className}`.trim(),
+      role: 'radio',
+      title: label,
+      'aria-label': label,
+    });
+    if (color) button.style.setProperty('--c', cssColor(color));
     button.addEventListener('click', () => {
       options.onBrush(color);
       sync(color);
@@ -91,27 +170,17 @@ export function renderColorPanel(options: ColorPanelOptions): HTMLElement {
     choices.push({ color, button });
     return button;
   };
-  for (const [name, rgb] of SWATCHES)
-    brushRow.append(choice(rgb, t(`colors.swatch.${name}` as MessageKey), 'swatch--color'));
-  brushRow.append(
-    choice(OFF_COLOR, t('colors.off'), 'swatch--off'),
-    choice(null, t('colors.transparent'), 'swatch--transparent'),
-  );
-  const custom = document.createElement('input');
-  custom.type = 'color';
-  custom.id = 'brush-custom';
-  custom.title = t('colors.custom');
-  custom.setAttribute('aria-label', t('colors.custom'));
+  swatches.append(choice(OFF_COLOR, t('colors.off')));
+  for (const [name, rgb] of SWATCHES) swatches.append(choice(rgb, t(`colors.swatch.${name}` as MessageKey)));
+  swatches.append(choice(null, t('colors.transparent'), 'trans'));
+  const custom = h('input', { type: 'color', id: 'brush-custom', 'aria-label': t('colors.custom') });
+  const customWrap = h('label', { class: 'sw custom', title: t('colors.custom') }, custom);
   custom.addEventListener('input', () => {
     const color = fromHex(custom.value);
     options.onBrush(color);
     sync(color);
   });
-  brushRow.append(custom);
-
-  const current = document.createElement('p');
-  current.className = 'color-panel__current';
-  current.id = 'brush-current';
+  swatches.append(customWrap);
 
   function sync(brush: LayerColor): void {
     let matched = false;
@@ -120,94 +189,36 @@ export function renderColorPanel(options: ColorPanelOptions): HTMLElement {
       matched ||= on;
       c.button.setAttribute('aria-checked', String(on));
     }
-    if (brush) custom.value = hex(brush);
-    current.textContent = t('colors.current', {
-      color: brush === null ? t('colors.transparent') : hex(brush).toUpperCase(),
-    });
+    customWrap.setAttribute('aria-checked', String(!matched));
+    if (brush) custom.value = hexColor(brush);
+    current.textContent = brush === null ? t('colors.transparentShort') : hexColor(brush).toUpperCase();
   }
   sync(options.brush);
 
-  const hint = document.createElement('p');
-  hint.className = 'color-panel__hint';
-  hint.textContent = t('colors.hint');
-
-  const reset = document.createElement('button');
-  reset.type = 'button';
-  reset.className = 'secondary';
-  reset.id = 'colors-reset';
-  reset.textContent = t('colors.reset');
-  reset.addEventListener('click', options.onReset);
-
-  panel.append(brushRow, current, hint, reset);
-
-  // --- effet de la couche
-  if (layer === 0) {
-    panel.append(effectHeading(t('effect.global'), t('effect.globalNote')), options.globalRgb());
-    return panel;
-  }
-  const effectBox = document.createElement('div');
-  effectBox.className = 'color-panel__effect';
-  const own = document.createElement('label');
-  const toggle = document.createElement('input');
-  toggle.type = 'checkbox';
-  toggle.id = 'effect-own';
-  own.append(toggle, ` ${t('effect.own', { layer: options.layerName })}`);
-  const body = document.createElement('div');
-  const renderEffect = (): void => {
-    const effect = lighting.effect(layer);
-    toggle.checked = Boolean(effect?.override);
-    if (!effect?.override) {
-      const note = document.createElement('p');
-      note.className = 'rgb__note';
-      note.textContent = t('effect.inherit');
-      body.replaceChildren(note);
-      return;
-    }
-    const controller = new RgbController({ request: () => Promise.reject(new Error('inutilisé')) }, effect, {
-      maxBrightness: options.maxBrightness,
-      persistent: true,
-      write: (mode) => lighting.setEffect(layer, { ...mode, override: true }),
-      onError: (error) => {
-        options.onError(error instanceof Error ? error.message : String(error));
-      },
-    });
-    body.replaceChildren(
-      renderRgbPanel({
-        controller,
-        supportedEffects: options.supportedEffects,
-        ledmapLayers: [],
-        onError: options.onError,
-      }),
-    );
-  };
-  toggle.addEventListener('change', () => {
-    const effect = toggle.checked
-      ? { ...options.globalMode(), override: true }
-      : { ...(lighting.effect(layer) ?? options.globalMode()), override: false };
-    lighting
-      .setEffect(layer, effect)
-      .then(renderEffect)
-      .catch((error: unknown) => {
-        options.onError(error instanceof Error ? error.message : String(error));
-      });
+  const fill = h('button', { type: 'button', class: 'btn', id: 'colors-fill', text: t('colors.fill') });
+  fill.addEventListener('click', () => {
+    options.onFill(currentBrush());
   });
-  renderEffect();
-  effectBox.append(effectHeading(t('effect.layer', { layer: options.layerName }), ''), own, body);
-  panel.append(effectBox);
-  return panel;
-}
-
-function effectHeading(title: string, note: string): HTMLElement {
-  const box = document.createElement('div');
-  box.className = 'color-panel__heading';
-  const h = document.createElement('h3');
-  h.textContent = title;
-  box.append(h);
-  if (note) {
-    const p = document.createElement('p');
-    p.className = 'rgb__note';
-    p.textContent = note;
-    box.append(p);
+  const clear = h('button', { type: 'button', class: 'btn', id: 'colors-clear', text: t('colors.clear') });
+  clear.addEventListener('click', () => {
+    options.onFill(null);
+  });
+  // le pinceau courant est celui coché (options.brush n'est que la valeur de départ)
+  function currentBrush(): LayerColor {
+    const checked = choices.find((c) => c.button.getAttribute('aria-checked') === 'true');
+    return checked ? checked.color : fromHex(custom.value);
   }
-  return box;
+
+  return [
+    h('div', { class: 'h' }, h('span', { text: t('colors.brush') }), current),
+    swatches,
+    h(
+      'p',
+      { class: 'hint', style: 'margin-top:-8px' },
+      t('colors.hintStart'),
+      h('kbd', { class: 'k', text: 'Alt' }),
+      t('colors.hintEnd'),
+    ),
+    h('div', { class: 'btns', style: 'margin-top:-6px' }, fill, clear),
+  ];
 }

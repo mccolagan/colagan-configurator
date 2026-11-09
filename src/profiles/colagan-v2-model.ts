@@ -26,19 +26,37 @@ const toLayout = ([x, y]: readonly [number, number]): [number, number] => [
   LAYOUT_WIDTH - (283.32 - x) / UNIT_MM,
   (y - 87.85) / UNIT_MM,
 ];
+const mirror = (x: number): number => LAYOUT_WIDTH - x;
 
 const right = RIGHT_OUTLINE_MM.map(toLayout);
-const left = right.map(([x, y]): [number, number] => [LAYOUT_WIDTH - x, y]).reverse();
+const left = right.map(([x, y]): [number, number] => [mirror(x), y]).reverse();
 
 /** Pico (droite, maître USB) et Pico W (gauche), montés au-dessus des cartes. */
 const PICO_X = 10.873;
 const PICO_Y = 1.358;
+/** USB-C du lien série : bord intérieur de la carte droite. */
+const USB_EDGE = 10.126;
+const USB_Y = 3.503;
+/** Trous de fixation de la carte droite. */
+const HOLES: readonly (readonly [number, number])[] = [
+  [17.97, 3.47],
+  [17.96, 0.47],
+  [10.97, 3.78],
+  [14.56, 4.26],
+];
+const SILK = { x: 10.95, y: 2.98, lines: ['Colagan Pico Split', 'KeyBoard V.1'] } as const;
 
 export const COLAGAN_V2_MODEL: Model3D = {
   outlines: [left, right],
   pcbColor: '#4e2163',
   boards: [
     { x: PICO_X, y: PICO_Y, label: 'Pico' },
-    { x: LAYOUT_WIDTH - PICO_X, y: PICO_Y, label: 'Pico W' },
+    { x: mirror(PICO_X), y: PICO_Y, label: 'Pico W', wireless: true },
   ],
+  links: [
+    { edge: USB_EDGE, y: USB_Y, out: -1 },
+    { edge: mirror(USB_EDGE), y: USB_Y, out: 1 },
+  ],
+  holes: [...HOLES, ...HOLES.map(([x, y]): [number, number] => [mirror(x), y])],
+  silk: [SILK, { ...SILK, x: mirror(SILK.x) }],
 };

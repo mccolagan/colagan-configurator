@@ -9,7 +9,8 @@ test.beforeEach(async ({ page }) => {
     localStorage.clear();
   });
   await page.getByRole('button', { name: 'Essayer sans clavier (démo)' }).click();
-  await page.getByRole('tab', { name: 'Sauvegarde' }).click();
+  // sauvegarde : feuille du clavier, ouverte par la pastille de connexion
+  await page.locator('#pill').click();
 });
 
 test('l’export produit le même fichier que Vial', async ({ page }) => {
@@ -28,21 +29,21 @@ test('l’import montre les différences, prend un instantané et peut être res
     mimeType: 'application/json',
     buffer: Buffer.from(modified),
   });
-  const dialog = page.getByRole('dialog');
+  const dialog = page.locator('dialog[open]');
   await expect(dialog).toContainText('1 touche(s) modifiée(s)');
   await dialog.getByRole('button', { name: 'Écrire dans le clavier' }).click();
   await expect(page.locator('#backup-status')).toContainText('Import terminé : 1 écriture(s)');
   await expect(page.locator('#snapshots li')).toHaveCount(1);
   await expect(page.locator('#snapshots')).toContainText('Avant import de « modifie.vil »');
 
-  await page.getByRole('tab', { name: 'Touches' }).click();
+  await page.locator('#device-close').click();
   await expect(page.locator('[data-key="0,1"]')).toContainText('A');
 
-  await page.getByRole('tab', { name: 'Sauvegarde' }).click();
+  await page.locator('#pill').click();
   await page.locator('#snapshots').getByRole('button', { name: 'Restaurer' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Écrire dans le clavier' }).click();
+  await page.locator('dialog[open]').getByRole('button', { name: 'Écrire dans le clavier' }).click();
   await expect(page.locator('#backup-status')).toContainText('Import terminé');
-  await page.getByRole('tab', { name: 'Touches' }).click();
+  await page.locator('#device-close').click();
   await expect(page.locator('[data-key="0,1"]')).toHaveAttribute('aria-label', 'KC_4 (0,1)');
 });
 

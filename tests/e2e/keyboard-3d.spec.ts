@@ -20,56 +20,96 @@ test.beforeEach(async ({ page }) => {
   await page.getByRole('button', { name: 'Essayer sans clavier (démo)' }).click();
 });
 
-/** Point écran d'une touche en vue « Dessus » (vue quasi orthogonale, cadrée sur la disposition). */
-async function keyPoint(page: Page, cx: number, cy: number): Promise<{ x: number; y: number }> {
-  const canvas = page.locator('.keyboard-3d canvas');
-  await canvas.scrollIntoViewIfNeeded();
-  const box = await canvas.boundingBox();
-  if (!box) throw new Error('canvas absent');
-  // encombrement du Colagan V2 (contour du PCB) : 18,26 × 6,1 unités, marge de 0,8, cadrage « Dessus » × 1,1
-  const scale = Math.min(box.width / ((18.26 + 0.8) * 1.1), box.height / ((6.1 + 0.8) * 1.1));
-  return {
-    x: box.x + box.width / 2 + (cx - 18.26 / 2) * scale,
-    y: box.y + box.height / 2 + (cy - 6.1 / 2 - 0.25) * scale,
-  };
+interface StudioHook {
+  __studio?: { keyPoint(row: number, col: number): { x: number; y: number } | undefined };
 }
 
-test('la vue 3D s’affiche par défaut, sans erreur, et suit les couches', async ({ page }) => {
-  await expect(page.getByRole('radio', { name: '3D' })).toHaveAttribute('aria-checked', 'true');
+/** Position écran d'une touche 3D, donnée par la scène elle-même (caméra, panneaux et écartement compris). */
+async function keyPoint(page: Page, row: number, col: number): Promise<{ x: number; y: number }> {
+  await page.waitForFunction(() => Boolean((window as StudioHook).__studio));
+  const point = await page.evaluate(([r, c]) => (window as StudioHook).__studio?.keyPoint(r, c), [
+    row,
+    col,
+  ] as const);
+  if (!point) throw new Error(`touche ${String(row)},${String(col)} hors champ`);
+  return point;
+}
+
+test('la vue 3D s’affiche par défaut, passe par toutes les vues sans erreur et suit les couches', async ({
+  page,
+}) => {
+  // cinq vues animées sous WebGL logiciel (SwiftShader) : bien plus lent qu'un vrai GPU
+  test.slow();
+  await expect(page.locator('#views').getByRole('button', { name: 'Produit' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   await expect(page.locator('.keyboard-3d canvas')).toBeVisible();
   await expect(page.locator('[data-key]')).toHaveCount(0);
+  for (const view of ['Dessus', 'Éclaté', 'Rayons X', 'Couches', 'Produit']) {
+    await page.locator('#views').getByRole('button', { name: view, exact: true }).click();
+    await page.waitForTimeout(500);
+  }
   await page.getByRole('tab', { name: '2 · FPS' }).click();
+  await page.getByRole('button', { name: 'Affichage' }).click();
   await page.getByRole('radio', { name: 'Clavier en direct' }).click();
   await page.waitForTimeout(1500);
   expect(errors).toEqual([]);
 });
 
 test('un clic sur une touche 3D la sélectionne', async ({ page }) => {
-  await page.getByRole('button', { name: 'Dessus' }).click();
+  await page.locator('#views').getByRole('button', { name: 'Dessus' }).click();
   await page.waitForTimeout(1600);
-  // [7,2] : moitié droite, 3e colonne, 3e rangée (centre 14,26 ; 2,5)
-  const point = await keyPoint(page, 14.26, 2.5);
+  const point = await keyPoint(page, 7, 2);
   await page.mouse.click(point.x, point.y);
   await expect(page.locator('#key-details')).toContainText('7,2');
   expect(errors).toEqual([]);
 });
 
 test('« Plan » revient au dessin SVG, et le choix est mémorisé', async ({ page }) => {
-  await page.getByRole('radio', { name: 'Plan' }).click();
+  await page.locator('#views').getByRole('button', { name: 'Plan' }).click();
   await expect(page.locator('[data-key]')).toHaveCount(58);
   await expect(page.locator('.keyboard-3d')).toHaveCount(0);
   await page.reload();
   await page.getByRole('button', { name: 'Essayer sans clavier (démo)' }).click();
-  await expect(page.getByRole('radio', { name: 'Plan' })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('#views').getByRole('button', { name: 'Plan' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   await expect(page.locator('[data-key]')).toHaveCount(58);
 });
 
-test('en mode Couleurs, un clic sur une touche 3D la peint', async ({ page }) => {
-  await page.getByRole('radio', { name: 'Couleurs' }).click();
-  await page.getByRole('button', { name: 'Dessus' }).click();
+test('dans l’onglet Lumière, un clic sur une touche 3D la peint', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Lumière' }).click();
+  await page.locator('#views').getByRole('button', { name: 'Dessus' }).click();
   await page.waitForTimeout(1600);
-  const point = await keyPoint(page, 14.26, 2.5);
+  const point = await keyPoint(page, 7, 2);
   await page.mouse.click(point.x, point.y);
   await expect(page.locator('#edit-status')).toContainText('1 touche(s) peinte(s)');
+  expect(errors).toEqual([]);
+});
+
+test('onglet Essai : les touches cliquées écrivent dans la sortie, MO(1) ouvre FN tant qu’il est tenu', async ({
+  page,
+}) => {
+  await page.getByRole('tab', { name: 'Essai' }).click();
+  await page.locator('#views').getByRole('button', { name: 'Dessus' }).click();
+  await page.waitForTimeout(1600);
+  const letter = await keyPoint(page, 6, 1);
+  await page.mouse.click(letter.x, letter.y);
+  await expect(page.locator('#try-output')).not.toHaveText('');
+  const mo = await keyPoint(page, 4, 0);
+  await page.mouse.move(mo.x, mo.y);
+  await page.mouse.down();
+  await expect(page.getByRole('tab', { name: '1 · FN' })).toHaveAttribute('aria-selected', 'true');
+  await page.mouse.up();
+  await expect(page.getByRole('tab', { name: '0 · BASE' })).toHaveAttribute('aria-selected', 'true');
+  expect(errors).toEqual([]);
+});
+
+test('une frappe sur le clavier de l’ordinateur s’affiche dans le défilant', async ({ page }) => {
+  await page.locator('body').press('KeyQ');
+  // AZERTY : la touche KC_Q porte « A »
+  await expect(page.locator('.ticker kbd').last()).toHaveText('A');
   expect(errors).toEqual([]);
 });

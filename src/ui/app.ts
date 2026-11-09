@@ -3,8 +3,11 @@ import { detectHidSupport, type HidSupport } from '../env/support';
 import { readLabelLayout, saveLabelLayout } from '../env/label-layout';
 import { readKeyboardView, saveKeyboardView, type KeyboardViewPref } from '../env/keyboard-view-pref';
 import { readLedDisplay, saveLedDisplay, type LedDisplay } from '../env/led-preview-pref';
-import { applyTheme, readTheme, type ThemeChoice } from '../env/theme';
+import { applyTheme, readTheme } from '../env/theme';
 import { DynamicState } from '../editor/dynamic-state';
+import { FirmwareSim } from '../editor/firmware-sim';
+import { hidUsages, sendsUsage } from '../editor/hid-usage';
+import { layerAccesses, resolveKey, type KeymapView } from '../editor/layer-access';
 import { trappedLayers } from '../editor/layer-guard';
 import {
   KeyEditor,
@@ -15,9 +18,10 @@ import {
 } from '../editor/key-editor';
 import { t, type MessageKey } from '../i18n';
 import { KeycodeCatalog } from '../keycodes/catalog';
-import { flatLabel, keyLabel, type LabelLayout } from '../keycodes/labels';
+import { flatLabel, keyLabel, type KeyLabel, type LabelLayout } from '../keycodes/labels';
 import { parseKle, type KeyGeometry } from '../keyboard/kle';
 import { layerName, profileFor, type KeyboardProfile } from '../profiles';
+import { layerDescription, layerTint, tripleTap } from '../profiles/layer-style';
 import { KeyboardClient } from '../protocol/client';
 import { LayerLighting } from '../rgb/layer-lighting';
 import { LedPreview, type LedPaint, type LedPaints, type PreviewState } from '../rgb/led-preview';
@@ -27,13 +31,20 @@ import type { Transport } from '../protocol/packet';
 import { HidTransport } from '../transport/hid-transport';
 import { confirmDialog } from './confirm';
 import { keyId, paintLeds, renderKeyboard, type KeyView } from './keyboard-view';
-import type { Keyboard3D } from './keyboard-3d/keyboard-3d';
-import { KeycodePicker, RISKY_KEYCODES } from './keycode-picker';
+import type { Keyboard3D, SceneHit, SceneMode, SceneView, StackLayer } from './keyboard-3d/keyboard-3d';
+import { KEYCODE_MIME, KeycodePicker, RISKY_KEYCODES } from './keycode-picker';
 import { renderBackupPanel } from './backup-panel';
 import { DynamicPanel } from './dynamic-panel';
-import { renderRgbPanel } from './rgb-panel';
 import { cssColor, renderColorPanel } from './color-panel';
 import { unlockKeyboard } from './unlock-dialog';
+import { DisplayPop, DEFAULT_SPLIT, type Split } from './studio/display-pop';
+import { brandMark, errorMessage, h, icon } from './studio/dom';
+import { EffectPreviews, previewKeys } from './studio/effect-preview';
+import { LayerRail, type MiniKey } from './studio/layer-rail';
+import { CommandPalette, type Command } from './studio/palette';
+import { Seg } from './studio/seg';
+import { Toasts, type ToastAction } from './studio/toasts';
+import { effectName } from './rgb-panel';
 
 // Interface raw HID de VIA / Vial
 const RAW_HID_FILTER: HIDDeviceFilter = { usagePage: 0xff60, usage: 0x61 };
@@ -43,6 +54,21 @@ const SUPPORT_MESSAGES: Record<HidSupport, { key: MessageKey; level: 'ok' | 'err
   'insecure-context': { key: 'support.insecure', level: 'error' },
   'no-webhid': { key: 'support.noWebhid', level: 'error' },
 };
+
+type InspectorTab = 'keys' | 'light' | 'dynamic' | 'try';
+type ViewChoice = SceneView | 'plan';
+type Level = 'ok' | 'warn' | 'error' | 'info';
+
+const VIEWS: readonly (readonly [ViewChoice, MessageKey])[] = [
+  ['product', 'kbview.product'],
+  ['top', 'kbview.top'],
+  ['exploded', 'kbview.exploded'],
+  ['xray', 'kbview.xray'],
+  ['stack', 'kbview.stack'],
+  ['plan', 'kbview.plan'],
+];
+
+const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 interface Session {
   readonly client: KeyboardClient;
@@ -55,6 +81,9 @@ interface Session {
   readonly rgb: RgbController | undefined;
   /** Couleurs réelles des LED (commande firmware 0xC0), lues tant qu'un dessin est visible. */
   readonly preview: LedPreview;
+  /** Keymap vue par les gardes, l'onglet Essai et la recherche des touches frappées. */
+  readonly keymap: KeymapView;
+  readonly sim: FirmwareSim;
   /** Couleurs et effet par couche : undefined = pas encore lus, null = non gérés par le firmware. */
   lighting: LayerLighting | null | undefined;
   lightingLoad: Promise<void> | undefined;
@@ -62,32 +91,33 @@ interface Session {
   dynamic: DynamicState | undefined;
 }
 
-interface WorkspaceView {
-  readonly tabs: HTMLElement;
-  readonly frame: HTMLElement;
-  readonly ledStatus: HTMLElement;
-  /** Mode Couleurs : pinceau et effet de la couche (à la place du choix de keycode). */
+interface Workspace {
+  readonly picker: KeycodePicker;
+  readonly keyHead: HTMLElement;
   readonly colorBox: HTMLElement;
-  readonly modeButtons: HTMLElement;
-  readonly details: HTMLElement;
-  readonly editStatus: HTMLElement;
-  readonly undo: HTMLButtonElement;
-  readonly redo: HTMLButtonElement;
-  picker: KeycodePicker;
+  readonly dynamicBox: HTMLElement;
+  readonly tryBox: HTMLElement;
+  readonly previews: EffectPreviews;
 }
 
-type Level = 'ok' | 'warn' | 'error' | 'info';
+interface OutputItem {
+  readonly ch?: string;
+  readonly tok?: string;
+}
+
+/** Usages HID qui produisent un caractère (lettres, chiffres, ponctuation, touche ISO). */
+const PRINTABLE = (usage: number): boolean =>
+  (usage >= 0x04 && usage <= 0x27) || (usage >= 0x2d && usage <= 0x38) || usage === 0x64;
 
 export class App {
   private session: Session | undefined;
+  private ws: Workspace | undefined;
   private layer = 0;
   private selected: { row: number; col: number } | undefined;
   private layout: LabelLayout = readLabelLayout();
-  private view: WorkspaceView | undefined;
-  private section: 'keys' | 'dynamic' | 'backup' = 'keys';
-  private mode: 'keys' | 'colors' = 'keys';
+  private tab: InspectorTab = 'keys';
   private brush: LayerColor = [255, 0, 0];
-  /** Glisser en cours en mode Couleurs : LED peintes (aperçu local) et leurs valeurs d'avant. */
+  /** Glisser en cours dans l'onglet Lumière : LED peintes (aperçu local) et leurs valeurs d'avant. */
   private drag:
     { layer: number; after: Map<number, LayerColor>; before: Map<number, LayerColor> } | undefined;
   private livePaints: LedPaints = new Map();
@@ -97,11 +127,45 @@ export class App {
   private ledDisplay: LedDisplay = readLedDisplay();
   private ledState: { state: PreviewState; detail?: string } = { state: 'idle' };
   private keyboardView: KeyboardViewPref = readKeyboardView();
+  private sceneView: SceneView = 'product';
+  private readonly split: Split = { ...DEFAULT_SPLIT };
+  private caseOn = true;
+  /** Dernier effet allumé, rétabli par l'interrupteur « Éclairage allumé ». */
+  private lastEffect = 0;
   /** Vue 3D (module chargé à la demande) ; abandonnée pour la session si WebGL manque. */
   private k3d: Keyboard3D | undefined;
   private k3dLoading = false;
   private k3dFailed = false;
+  private planKeys: SVGSVGElement | undefined;
+  private tryOutput: OutputItem[] = [];
+  private readonly physical = new Map<string, { row: number; col: number }>();
+  private siriTimer = 0;
+  private tickerTimer = 0;
   private readonly support = detectHidSupport(window);
+
+  // coque, construite une fois
+  private stage!: HTMLElement;
+  private planFrame!: HTMLElement;
+  private views!: Seg<ViewChoice>;
+  private rail!: LayerRail;
+  private inspector!: HTMLElement;
+  private tabs!: Seg<InspectorTab>;
+  private panels!: Record<InspectorTab, HTMLElement>;
+  private undoButton!: HTMLButtonElement;
+  private redoButton!: HTMLButtonElement;
+  private pill!: HTMLButtonElement;
+  private display!: DisplayPop;
+  private displayButton!: HTMLButtonElement;
+  private welcome!: HTMLElement;
+  private device!: HTMLElement;
+  private ticker!: HTMLElement;
+  private siri!: HTMLElement;
+  private tip!: HTMLElement;
+  private loader!: HTMLElement;
+  private editStatusEl!: HTMLElement;
+  private connection!: HTMLElement;
+  private toasts!: Toasts;
+  private palette!: CommandPalette;
 
   constructor(private readonly root: HTMLElement) {}
 
@@ -109,7 +173,17 @@ export class App {
     applyTheme(readTheme());
     this.renderShell();
     document.addEventListener('keydown', (event) => {
-      this.onShortcut(event);
+      this.onKeyDown(event);
+    });
+    document.addEventListener('keyup', (event) => {
+      this.onKeyUp(event);
+    });
+    window.addEventListener('blur', () => {
+      for (const { row, col } of this.physical.values()) this.k3d?.release(row, col);
+      this.physical.clear();
+    });
+    window.addEventListener('resize', () => {
+      this.layoutScene();
     });
     if (this.support === 'ok') {
       navigator.hid.addEventListener('disconnect', (event) => {
@@ -122,70 +196,293 @@ export class App {
       });
       void this.reconnect();
     }
+    this.renderWorkspace();
   }
 
-  private element(selector: string): HTMLElement {
-    const el = this.root.querySelector<HTMLElement>(selector);
-    if (!el) throw new Error(`Élément ${selector} absent`);
-    return el;
-  }
-
-  private status(level: Level, message: string): void {
-    const el = this.element('#connection');
-    el.dataset.level = level;
-    el.textContent = message;
-  }
+  // ---------------------------------------------------------------------------------------------
+  // Coque
+  // ---------------------------------------------------------------------------------------------
 
   private renderShell(): void {
     const support = SUPPORT_MESSAGES[this.support];
-    this.root.innerHTML = `
-      <div class="shell">
-        <header class="topbar">
-          <div>
-            <h1>${t('app.title')}</h1>
-            <p>${t('app.subtitle')}</p>
-          </div>
-          <div class="topbar__prefs">
-          <label>${t('labels.label')}
-            <select id="labels">
-              <option value="azerty">${t('labels.azerty')}</option>
-              <option value="qwerty">${t('labels.qwerty')}</option>
-            </select>
-          </label>
-          <label>${t('theme.label')}
-            <select id="theme">
-              <option value="auto">${t('theme.auto')}</option>
-              <option value="light">${t('theme.light')}</option>
-              <option value="dark">${t('theme.dark')}</option>
-            </select>
-          </label>
-          </div>
-        </header>
-        <section class="panel">
-          <p class="status" id="support" data-level="${support.level}">${t(support.key)}</p>
-          <div class="actions">
-            <button id="connect" type="button" ${this.support === 'ok' ? '' : 'disabled'}>${t('connect.button')}</button>
-            <button id="demo" type="button" class="secondary">${t('demo.button')}</button>
-          </div>
-          <p class="status" id="connection" role="status" aria-live="polite"></p>
-        </section>
-        <section id="workspace" class="panel" hidden></section>
-      </div>`;
+    this.stage = h('div', { class: 'stage', id: 'stage' });
+    this.planFrame = h('div', { class: 'plan-frame', hidden: true });
+    this.loader = h('div', { id: 'loader', hidden: true }, h('i'));
+    this.stage.append(this.planFrame, this.loader);
 
-    const themeSelect = this.element('#theme') as HTMLSelectElement;
-    themeSelect.value = readTheme();
-    themeSelect.addEventListener('change', () => {
-      applyTheme(themeSelect.value as ThemeChoice);
+    this.views = new Seg<ViewChoice>({
+      label: t('kbview.label'),
+      role: 'pressed',
+      id: 'views',
+      className: 'glass views',
+      options: VIEWS.map(([value, label]) => ({ value, label: t(label) })),
+      value: this.viewChoice(),
+      onChange: (value) => {
+        this.setView(value);
+      },
     });
-    const labelsSelect = this.element('#labels') as HTMLSelectElement;
-    labelsSelect.value = this.layout;
-    labelsSelect.addEventListener('change', () => {
-      this.layout = labelsSelect.value === 'qwerty' ? 'qwerty' : 'azerty';
-      saveLabelLayout(this.layout);
-      this.renderWorkspace();
+
+    this.undoButton = this.roundButton(
+      'undo',
+      'undo',
+      `${t('edit.undo')} (Ctrl+Z)`,
+      () => void this.travel('undo'),
+    );
+    this.redoButton = this.roundButton(
+      'redo',
+      'redo',
+      `${t('edit.redo')} (Ctrl+Maj+Z)`,
+      () => void this.travel('redo'),
+    );
+    this.pill = h('button', { class: 'pill glass', id: 'pill', type: 'button', 'data-state': 'off' });
+    this.pill.addEventListener('click', () => {
+      if (this.session) this.openScrim(this.device);
+      else this.root.querySelector<HTMLButtonElement>('#connect')?.focus();
     });
-    this.element('#connect').addEventListener('click', () => void this.connect());
-    this.element('#demo').addEventListener('click', () => void this.startDemo());
+    this.displayButton = this.roundButton('display-button', 'sliders', t('display.title'), () => {
+      this.display.toggle();
+      this.displayButton.setAttribute('aria-expanded', String(this.display.open));
+    });
+    this.displayButton.setAttribute('aria-expanded', 'false');
+    this.displayButton.setAttribute('aria-controls', 'display-pop');
+    const commandButton = this.roundButton('command-button', 'search', t('palette.button'), () => {
+      this.palette.show();
+    });
+    this.display = new DisplayPop({
+      ledDisplay: this.ledDisplay,
+      onLedDisplay: (value) => {
+        this.ledDisplay = value;
+        saveLedDisplay(value);
+        this.updatePreview();
+        this.showLedState();
+        this.paintPreview();
+      },
+      layout: this.layout,
+      onLayout: (value) => {
+        this.layout = value;
+        saveLabelLayout(value);
+        this.renderWorkspace();
+      },
+      theme: readTheme(),
+      onTheme: (value) => {
+        applyTheme(value);
+        this.refreshRail();
+      },
+      split: this.split,
+      onSplit: (split) => {
+        this.k3d?.setSplit(split);
+      },
+      caseOn: this.caseOn,
+      onCase: (on) => {
+        this.caseOn = on;
+        this.k3d?.setCase(on);
+      },
+    });
+    document.addEventListener('pointerdown', (event) => {
+      const target = event.target as Node;
+      if (
+        this.display.open &&
+        !this.display.element.contains(target) &&
+        !this.displayButton.contains(target)
+      ) {
+        this.display.toggle(false);
+        this.displayButton.setAttribute('aria-expanded', 'false');
+      }
+    });
+
+    const top = h(
+      'header',
+      { class: 'top' },
+      h('div', { class: 'brand' }, brandMark(), 'Colagan ', h('span', { text: 'Studio' })),
+      this.views.element,
+      h(
+        'div',
+        { class: 'actions' },
+        this.undoButton,
+        this.redoButton,
+        this.pill,
+        this.displayButton,
+        commandButton,
+        this.display.element,
+      ),
+    );
+
+    this.rail = new LayerRail((layer) => {
+      this.setLayer(layer);
+    });
+
+    this.tabs = new Seg<InspectorTab>({
+      label: t('inspector.label'),
+      role: 'tab',
+      id: 'inspector-tabs',
+      className: 'plain',
+      options: [
+        { value: 'keys', label: t('view.keys'), id: 'tab-keys' },
+        { value: 'light', label: t('view.light'), id: 'tab-light' },
+        { value: 'dynamic', label: t('view.dynamic'), id: 'tab-dynamic' },
+        { value: 'try', label: t('view.try'), id: 'tab-try' },
+      ],
+      value: this.tab,
+      onChange: (tab) => {
+        this.setTab(tab);
+      },
+    });
+    const sheetToggle = h(
+      'button',
+      { class: 'round sheet-toggle', type: 'button', 'aria-label': t('inspector.collapse') },
+      icon('chevron', 16, 2.2),
+    );
+    sheetToggle.addEventListener('click', () => {
+      this.inspector.classList.toggle('collapsed');
+      this.layoutScene();
+    });
+    const panel = (id: InspectorTab): HTMLElement =>
+      h('section', {
+        class: 'panel',
+        id: `panel-${id}`,
+        role: 'tabpanel',
+        'aria-labelledby': `tab-${id}`,
+        hidden: id !== this.tab,
+      });
+    this.panels = {
+      keys: panel('keys'),
+      light: panel('light'),
+      dynamic: panel('dynamic'),
+      try: panel('try'),
+    };
+    this.inspector = h(
+      'aside',
+      { class: 'inspector glass', id: 'inspector', 'aria-label': t('inspector.label') },
+      h('div', { class: 'insp-head' }, this.tabs.element, sheetToggle),
+      ...Object.values(this.panels),
+    );
+    if (innerWidth <= 820) this.inspector.classList.add('collapsed');
+    new ResizeObserver(() => {
+      this.layoutScene();
+    }).observe(this.inspector);
+
+    this.ticker = h('div', { class: 'ticker glass idle', 'aria-hidden': 'true' });
+    this.toasts = new Toasts();
+
+    this.connection = h('p', { class: 'status', id: 'connection', role: 'status', 'aria-live': 'polite' });
+    const connect = h('button', {
+      class: 'btn primary',
+      id: 'connect',
+      type: 'button',
+      text: t('connect.button'),
+      disabled: this.support !== 'ok',
+    });
+    connect.addEventListener('click', () => void this.connect());
+    const demo = h('button', { class: 'btn', id: 'demo', type: 'button', text: t('demo.button') });
+    demo.addEventListener('click', () => void this.startDemo());
+    this.welcome = h(
+      'div',
+      { class: 'welcome', id: 'welcome' },
+      h(
+        'section',
+        { class: 'sheet glass', 'aria-labelledby': 'welcome-title' },
+        brandMark(44),
+        h('h1', { id: 'welcome-title', text: t('app.title') }),
+        h('p', { text: t('app.subtitle') }),
+        h('p', { class: 'status', id: 'support', 'data-level': support.level, text: t(support.key) }),
+        h('div', { class: 'btns' }, connect, demo),
+        this.connection,
+      ),
+    );
+
+    this.device = h('div', { class: 'scrim', id: 'device', hidden: true });
+    this.device.addEventListener('pointerdown', (event) => {
+      if (event.target === this.device) this.device.hidden = true;
+    });
+    this.palette = new CommandPalette(() => this.commands());
+    this.siri = h('div', { id: 'siri', 'aria-hidden': 'true' });
+    this.tip = h('div', { id: 'tip', class: 'glass', hidden: true });
+    this.editStatusEl = h('p', {
+      class: 'sr-only',
+      id: 'edit-status',
+      role: 'status',
+      'aria-live': 'polite',
+    });
+
+    this.root.replaceChildren(
+      this.stage,
+      h(
+        'div',
+        { class: 'ui' },
+        top,
+        this.welcome,
+        this.rail.element,
+        this.inspector,
+        this.ticker,
+        this.toasts.element,
+      ),
+      this.siri,
+      this.tip,
+      this.device,
+      this.palette.element,
+      this.editStatusEl,
+    );
+    document.title = t('app.title');
+  }
+
+  private roundButton(
+    id: string,
+    name: Parameters<typeof icon>[0],
+    label: string,
+    onClick: () => void,
+  ): HTMLButtonElement {
+    const button = h(
+      'button',
+      { class: 'round glass', id, type: 'button', 'aria-label': label, title: label },
+      icon(name),
+    );
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  private openScrim(scrim: HTMLElement): void {
+    this.device.hidden = scrim !== this.device;
+    scrim.hidden = false;
+    scrim.querySelector<HTMLElement>('button')?.focus();
+  }
+
+  private viewChoice(): ViewChoice {
+    return this.keyboardView === 'plan' || this.k3dFailed ? 'plan' : this.sceneView;
+  }
+
+  /** Zone libre entre les panneaux : la caméra 3D (ou le plan) s'y centre. */
+  private layoutScene(): void {
+    const W = innerWidth;
+    const H = innerHeight;
+    let insets = { left: 16, right: 16, top: 76, bottom: 24 };
+    if (this.session) {
+      const rail = this.rail.element.getBoundingClientRect();
+      const inspector = this.inspector.getBoundingClientRect();
+      const views = this.views.element.getBoundingClientRect();
+      insets =
+        W <= 820
+          ? { left: 0, right: 0, top: rail.bottom + 6, bottom: H - Math.min(inspector.top, views.top) + 6 }
+          : { left: rail.right + 8, right: W - inspector.left + 8, top: 76, bottom: 24 };
+    }
+    this.k3d?.setInsets(insets);
+    Object.assign(this.planFrame.style, {
+      left: `${String(insets.left)}px`,
+      right: `${String(insets.right)}px`,
+      top: `${String(insets.top)}px`,
+      bottom: `${String(insets.bottom)}px`,
+    });
+    this.views.sync();
+    this.tabs.sync();
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Connexion
+  // ---------------------------------------------------------------------------------------------
+
+  private status(level: Level, message: string): void {
+    this.connection.dataset.level = level;
+    this.connection.textContent = message;
+    if (this.session && level !== 'ok') this.toasts.show(message, level);
   }
 
   /** Clavier déjà autorisé lors d'une visite précédente : reconnexion sans clic. */
@@ -229,12 +526,12 @@ export class App {
   }
 
   private fail(error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error);
-    this.status('error', `${t('connect.error', { message })} ${t('connect.linuxHint')}`);
+    this.status('error', `${t('connect.error', { message: errorMessage(error) })} ${t('connect.linuxHint')}`);
   }
 
   private async attach(transport: Transport, demo: boolean, device?: HIDDevice): Promise<void> {
     this.status('info', t('connect.loading'));
+    this.glow(4000);
     const client = await KeyboardClient.connect(transport);
     const { info } = client;
     const catalog = new KeycodeCatalog({
@@ -244,21 +541,19 @@ export class App {
       customKeycodes: info.definition.customKeycodes ?? [],
     });
     const keys = parseKle(info.definition.layouts.keymap);
+    const profile = profileFor(info.uid);
     this.session?.preview.stop();
     const preview = new LedPreview(transport, {
       onFrame: (paints) => {
         this.livePaints = paints;
         this.paintPreview();
       },
-      // le clavier affiche la couche éditée : en mode Couleurs, ou quand le dessin montre la couche
-      previewLayer: () =>
-        this.section === 'keys' && (this.mode === 'colors' || this.ledDisplay === 'layer')
-          ? this.layer
-          : null,
+      // le clavier affiche la couche éditée : dans l'onglet Lumière, ou quand le dessin montre la couche
+      previewLayer: () => (this.tab === 'light' || this.ledDisplay === 'layer' ? this.layer : null),
       onInfo: (ledInfo) => {
         if (ledInfo.activeLayer !== this.keyboardLayer) {
           this.keyboardLayer = ledInfo.activeLayer;
-          this.markActiveTab();
+          this.refreshRail();
         }
       },
       onState: (state, detail) => {
@@ -266,6 +561,13 @@ export class App {
         this.showLedState();
       },
     });
+    const keymap: KeymapView = {
+      layers: info.layers,
+      positions: keys.map((k) => [k.row, k.col] as const),
+      getKey: (l, r, c) => client.getKey(l, r, c),
+      serialize: (code) => catalog.serialize(code),
+    };
+    const triple = tripleTap(profile);
     this.ledState = { state: 'idle' };
     this.livePaints = new Map();
     this.keyboardLayer = undefined;
@@ -274,7 +576,7 @@ export class App {
       client,
       catalog,
       keys,
-      profile: profileFor(info.uid),
+      profile,
       demo,
       ...(device ? { device } : {}),
       editor: new KeyEditor(client, this.dynamicStore(), this.ledStore()),
@@ -282,21 +584,23 @@ export class App {
         ? new RgbController(transport, info.rgb.initialMode, {
             maxBrightness: info.rgb.info.maxBrightness,
             onError: (error) => {
-              this.status(
-                'error',
-                t('rgb.error', { message: error instanceof Error ? error.message : String(error) }),
-              );
+              this.editStatus('error', t('rgb.error', { message: errorMessage(error) }));
             },
           })
         : undefined,
       preview,
+      keymap,
+      sim: new FirmwareSim(keymap, triple ? { code: triple.code, layer: triple.layer } : undefined),
       lighting: undefined,
       lightingLoad: undefined,
       dynamic: undefined,
     };
+    const initialEffect = info.rgb?.initialMode.effect ?? 0;
+    this.lastEffect = initialEffect || (info.rgb?.supportedEffects.find((e) => e !== 0) ?? 0);
     this.dynamicPanel = undefined;
     this.layer = 0;
     this.selected = undefined;
+    this.tryOutput = [];
     this.status(
       'ok',
       t('connect.ready', {
@@ -306,297 +610,357 @@ export class App {
       }),
     );
     this.renderWorkspace();
+    this.k3d?.flash();
+    this.toasts.show(
+      demo
+        ? t('demo.banner')
+        : t('connect.toast', { name: info.definition.name ?? device?.productName ?? '?' }),
+      demo ? 'info' : 'ok',
+    );
   }
 
-  /** Construit l'espace de travail d'une session (le panneau de keycodes garde sa recherche entre deux rendus). */
+  // ---------------------------------------------------------------------------------------------
+  // Espace de travail
+  // ---------------------------------------------------------------------------------------------
+
+  /** (Re)construit tout ce qui dépend de la session (le plan, la 3D et les panneaux). */
   private renderWorkspace(): void {
-    const workspace = this.element('#workspace');
     const session = this.session;
-    workspace.hidden = !session;
-    workspace.replaceChildren();
     this.k3d?.dispose();
     this.k3d = undefined;
-    this.view = undefined;
-    if (!session) return;
-
-    if (session.demo) {
-      const banner = document.createElement('p');
-      banner.className = 'banner';
-      banner.textContent = t('demo.banner');
-      workspace.append(banner);
+    this.planKeys = undefined;
+    this.planFrame.replaceChildren();
+    this.planFrame.hidden = true;
+    this.loader.hidden = true;
+    this.ws = undefined;
+    for (const p of Object.values(this.panels)) p.replaceChildren();
+    this.welcome.hidden = Boolean(session);
+    this.views.element.hidden = !session;
+    this.rail.element.hidden = !session;
+    this.inspector.hidden = !session;
+    this.display.showSceneControls(Boolean(session) && this.viewChoice() !== 'plan');
+    this.updatePill();
+    if (!session) {
+      this.undoButton.hidden = this.redoButton.hidden = true;
+      this.device.hidden = true;
+      this.layoutScene();
+      return;
     }
 
-    const tabs = document.createElement('div');
-    tabs.className = 'tabs';
-    tabs.setAttribute('role', 'tablist');
-    tabs.setAttribute('aria-label', t('layers.label'));
-    const history = document.createElement('div');
-    history.className = 'history';
-    const undo = this.button(t('edit.undo'), 'Ctrl+Z', () => void this.undo());
-    undo.id = 'undo';
-    const redo = this.button(t('edit.redo'), 'Ctrl+Maj+Z', () => void this.redo());
-    redo.id = 'redo';
-    history.append(undo, redo);
-
-    const frame = document.createElement('div');
-    frame.className = 'keyboard-frame';
-    const details = document.createElement('p');
-    details.className = 'key-details';
-    details.id = 'key-details';
-    const editStatus = document.createElement('p');
-    editStatus.className = 'status edit-status';
-    editStatus.id = 'edit-status';
-    editStatus.setAttribute('role', 'status');
-    editStatus.setAttribute('aria-live', 'polite');
-
-    const picker = this.createPicker(session);
-    const colorBox = document.createElement('div');
-    colorBox.id = 'color-box';
-    const modeButtons = this.modeSwitch();
-    const ledBar = this.ledBar();
-    const keysSection = document.createElement('div');
-    keysSection.id = 'section-keys';
-    const header = document.createElement('div');
-    header.className = 'keys-header';
-    header.append(modeButtons, this.viewSwitch(), ledBar.element);
-    keysSection.append(tabs, header, frame, details, picker.element, colorBox);
-    const dynamicSection = document.createElement('div');
-    dynamicSection.id = 'section-dynamic';
-    const backupSection = document.createElement('div');
-    backupSection.id = 'section-backup';
-    backupSection.append(
-      renderBackupPanel({
-        client: session.client,
-        catalog: session.catalog,
-        positions: new Set(session.keys.map((k) => keyId(k.row, k.col))),
-        keyboardName: session.client.info.definition.name ?? 'clavier',
-        ensureUnlocked: () => this.ensureUnlocked(),
-        onImported: () => {
-          session.editor.clear();
-          // macros / tap-dance / combos relus à la prochaine ouverture de l'onglet
-          session.dynamic = undefined;
-          this.dynamicPanel = undefined;
-          dynamicSection.replaceChildren();
-          this.refresh();
-        },
-      }),
+    const { client, profile } = session;
+    this.rail.setLayers(
+      Array.from({ length: client.info.layers }, (_, layer) => ({
+        name: layerName(profile, layer),
+        description: layerDescription(profile, layer) ?? '',
+        tint: layerTint(profile, layer),
+      })),
     );
 
-    const nav = document.createElement('div');
-    nav.className = 'tabs sections';
-    nav.setAttribute('role', 'tablist');
-    nav.setAttribute('aria-label', t('view.label'));
-    const showSection = (): void => {
-      keysSection.hidden = this.section !== 'keys';
-      backupSection.hidden = this.section !== 'backup';
-      dynamicSection.hidden = this.section !== 'dynamic';
-      this.updatePreview();
-      if (this.section === 'dynamic' && !dynamicSection.hasChildNodes())
-        void this.loadDynamic(dynamicSection);
-      for (const tab of nav.children) {
-        tab.setAttribute('aria-selected', String((tab as HTMLElement).dataset.section === this.section));
-      }
-    };
-    for (const [id, label] of [
-      ['keys', t('view.keys')],
-      ['dynamic', t('view.dynamic')],
-      ['backup', t('view.backup')],
-    ] as const) {
-      const tab = document.createElement('button');
-      tab.type = 'button';
-      tab.setAttribute('role', 'tab');
-      tab.dataset.section = id;
-      tab.textContent = label;
-      tab.addEventListener('click', () => {
-        this.section = id;
-        showSection();
-      });
-      nav.append(tab);
-    }
-    showSection();
-    const toolbar = document.createElement('div');
-    toolbar.className = 'toolbar';
-    toolbar.append(nav, history);
-    workspace.append(toolbar, editStatus, keysSection, dynamicSection, backupSection);
-    this.view = {
-      tabs,
-      frame,
-      ledStatus: ledBar.status,
-      colorBox,
-      modeButtons,
-      details,
-      editStatus,
-      undo,
-      redo,
-      picker,
-    };
+    const picker = new KeycodePicker({
+      catalog: session.catalog,
+      layout: this.layout,
+      onPick: (code) => void this.assign(code),
+    });
+    const keyHead = h('div', { class: 'panel-part', id: 'key-details' });
+    const pickerHead = h(
+      'div',
+      { class: 'h' },
+      h('span', { text: t('picker.title') }),
+      h('small', { id: 'picker-hint' }),
+    );
+    this.panels.keys.append(keyHead, pickerHead, picker.element);
+    const colorBox = h('div', { class: 'panel-part', id: 'color-box' });
+    this.panels.light.append(colorBox);
+    const dynamicBox = h('div', { class: 'panel-part', id: 'section-dynamic' });
+    this.panels.dynamic.append(dynamicBox);
+    const tryBox = h('div', { class: 'panel-part', id: 'try-box' });
+    this.panels.try.append(tryBox);
+    const previews = new EffectPreviews(previewKeys(session.keys), () => {
+      const mode = session.rgb?.mode;
+      return { hue: mode?.hue ?? 0, saturation: mode?.saturation ?? 255, speed: mode?.speed ?? 80 };
+    });
+    this.ws = { picker, keyHead, colorBox, dynamicBox, tryBox, previews };
+    this.renderDevice(session);
+    this.setTab(this.tab, false);
     this.showLedState();
+    this.refresh();
+    this.layoutScene();
+  }
+
+  private updatePill(): void {
+    const session = this.session;
+    const state = !session ? 'off' : session.demo ? 'demo' : 'on';
+    this.pill.dataset.state = state;
+    const name = session?.client.info.definition.name ?? session?.device?.productName ?? '';
+    this.pill.replaceChildren(h('span', { class: 'orb' }), !session ? t('pill.offline') : name);
+    if (session)
+      this.pill.append(
+        h('span', { class: 'sub', text: session.demo ? t('pill.demo') : t('pill.connected') }),
+      );
+    this.pill.setAttribute('aria-label', session ? t('pill.open', { name }) : t('pill.offline'));
+  }
+
+  /** Feuille du clavier (clic sur la pastille) : informations, sauvegarde .vil et instantanés. */
+  private renderDevice(session: Session): void {
+    const { info } = session.client;
+    const name = info.definition.name ?? session.device?.productName ?? '?';
+    const items: [string, string][] = [
+      [t('device.protocol'), `VIA ${String(info.viaProtocol)} · Vial ${String(info.vialProtocol)}`],
+      [t('device.layers'), String(info.layers)],
+      [t('device.keys'), String(session.keys.length)],
+      [
+        t('device.dynamic'),
+        t('device.dynamicValue', {
+          macros: info.macroCount,
+          td: info.dynamic.tapDance,
+          combos: info.dynamic.combo,
+        }),
+      ],
+      [
+        t('device.rgb'),
+        info.rgb
+          ? t('device.rgbValue', {
+              effects: info.rgb.supportedEffects.length,
+              max: info.rgb.info.maxBrightness,
+            })
+          : t('device.rgbNone'),
+      ],
+    ];
+    const backup = renderBackupPanel({
+      client: session.client,
+      catalog: session.catalog,
+      positions: new Set(session.keys.map((k) => keyId(k.row, k.col))),
+      keyboardName: name,
+      ensureUnlocked: () => this.ensureUnlocked(),
+      onImported: () => {
+        session.editor.clear();
+        // macros / tap-dance / combos relus à la prochaine ouverture de l'onglet
+        session.dynamic = undefined;
+        this.dynamicPanel = undefined;
+        this.ws?.dynamicBox.replaceChildren();
+        this.refresh();
+      },
+    });
+    const close = h('button', {
+      class: 'btn primary',
+      type: 'button',
+      id: 'device-close',
+      text: t('device.close'),
+    });
+    close.addEventListener('click', () => {
+      this.device.hidden = true;
+    });
+    const change = h('button', {
+      class: 'btn',
+      type: 'button',
+      text: t('device.change'),
+      disabled: this.support !== 'ok',
+    });
+    change.addEventListener('click', () => {
+      this.device.hidden = true;
+      void this.connect();
+    });
+    const demo = h('button', { class: 'btn', type: 'button', text: t('device.demo') });
+    demo.addEventListener('click', () => {
+      this.device.hidden = true;
+      void this.startDemo();
+    });
+    this.device.replaceChildren(
+      h(
+        'div',
+        { class: 'sheet glass', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'device-title' },
+        h('h2', { id: 'device-title', text: name }),
+        h('p', { text: session.demo ? t('demo.banner') : t('device.live') }),
+        h(
+          'div',
+          { class: 'group' },
+          ...items.map(([label, value]) =>
+            h('div', { class: 'item' }, h('span', { text: label }), h('span', { class: 'v', text: value })),
+          ),
+        ),
+        h('div', { class: 'h', text: t('view.backup') }),
+        backup,
+        h('div', { class: 'btns' }, change, demo, close),
+      ),
+    );
+  }
+
+  private setTab(tab: InspectorTab, refresh = true): void {
+    this.tab = tab;
+    this.tabs.set(tab);
+    for (const [id, panel] of Object.entries(this.panels)) panel.hidden = id !== tab;
+    if (this.inspector.classList.contains('collapsed') && refresh) {
+      this.inspector.classList.remove('collapsed');
+      this.layoutScene();
+    }
+    const session = this.session;
+    if (session && this.ws) {
+      if (tab === 'dynamic' && !this.ws.dynamicBox.hasChildNodes()) void this.loadDynamic(this.ws.dynamicBox);
+      if (tab === 'try') session.sim.reset(this.layer);
+      if (tab !== 'light') this.colorPanelKey = '';
+    }
+    this.updatePreview();
+    if (refresh) this.refresh();
+  }
+
+  private setView(view: ViewChoice): void {
+    if (view === 'plan') {
+      this.keyboardView = 'plan';
+    } else {
+      if (this.k3dFailed) {
+        this.toasts.show(t('kbview.unsupported'), 'warn');
+        this.views.set('plan');
+        return;
+      }
+      this.keyboardView = '3d';
+      this.sceneView = view;
+      this.k3d?.setView(view);
+    }
+    saveKeyboardView(this.keyboardView);
+    this.display.showSceneControls(this.viewChoice() !== 'plan');
     this.refresh();
   }
 
-  /** Boutons à choix unique (rôle radio) ; renvoie le conteneur. */
-  private segmented<T extends string>(
-    label: string,
-    id: string,
-    options: readonly (readonly [T, string, string?])[],
-    current: T,
-    onChange: (value: T) => void,
-  ): HTMLElement {
-    const group = document.createElement('div');
-    group.className = 'segmented';
-    group.id = id;
-    group.setAttribute('role', 'radiogroup');
-    group.setAttribute('aria-label', label);
-    const caption = document.createElement('span');
-    caption.className = 'segmented__label';
-    caption.textContent = label;
-    group.append(caption);
-    for (const [value, text, title] of options) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.setAttribute('role', 'radio');
-      button.setAttribute('aria-checked', String(value === current));
-      button.dataset.value = value;
-      button.textContent = text;
-      if (title) button.title = title;
-      button.addEventListener('click', () => {
-        for (const other of group.querySelectorAll('button')) {
-          other.setAttribute('aria-checked', String(other === button));
-        }
-        onChange(value);
-      });
-      group.append(button);
-    }
-    return group;
+  private setLayer(layer: number): void {
+    if (!this.session || layer < 0 || layer >= this.session.client.info.layers) return;
+    this.layer = layer;
+    if (this.tab === 'try') this.session.sim.reset(layer);
+    this.refresh();
   }
 
-  private modeSwitch(): HTMLElement {
-    return this.segmented<'keys' | 'colors'>(
-      t('mode.label'),
-      'edit-mode',
-      [
-        ['keys', t('mode.keys')],
-        ['colors', t('mode.colors')],
-      ],
-      this.mode,
-      (mode) => {
-        this.mode = mode;
-        this.updatePreview();
-        this.refresh();
-      },
-    );
-  }
-
-  private viewSwitch(): HTMLElement {
-    return this.segmented<KeyboardViewPref>(
-      t('kbview.label'),
-      'keyboard-view',
-      [
-        ['3d', t('kbview.3d')],
-        ['plan', t('kbview.plan')],
-      ],
-      this.keyboardView,
-      (value) => {
-        this.keyboardView = value;
-        saveKeyboardView(value);
-        this.refresh();
-      },
-    );
+  /** Mode de la scène selon l'onglet : choisir, peindre ou essayer les touches. */
+  private sceneMode(): SceneMode {
+    return this.tab === 'light' ? 'paint' : this.tab === 'try' ? 'try' : 'keys';
   }
 
   /** Charge la vue 3D (three.js dans un fichier séparé) puis redessine ; reste en plan si WebGL manque. */
   private load3d(session: Session): void {
     if (this.k3dLoading || this.k3dFailed) return;
     this.k3dLoading = true;
+    this.loader.hidden = false;
+    this.loader.classList.remove('done');
     import('./keyboard-3d/keyboard-3d')
       .then(({ Keyboard3D }) => {
-        if (this.session !== session || this.keyboardView !== '3d' || this.k3d) return;
+        if (this.session !== session || this.viewChoice() === 'plan' || this.k3d) return;
         if (!Keyboard3D.supported()) {
           this.k3dFailed = true;
-          this.editStatus('info', t('kbview.unsupported'));
+          this.toasts.show(t('kbview.unsupported'), 'warn');
           return;
         }
+        const part = (name: string): readonly [string, string] => [
+          t(`kbview.part.${name}` as MessageKey),
+          t(`kbview.part.${name}.sub` as MessageKey),
+        ];
         this.k3d = new Keyboard3D({
           keys: session.keys,
           model: session.profile?.model3d,
-          text: { canvas: t('kbview.canvas'), product: t('kbview.product'), top: t('kbview.top') },
+          text: {
+            canvas: t('kbview.canvas'),
+            parts: {
+              caps: part('caps'),
+              switches: part('switches'),
+              leds: part('leds'),
+              case: part('case'),
+              pcb: part('pcb'),
+              sockets: part('sockets'),
+              pico: part('pico'),
+              usb: part('usb'),
+            },
+          },
           onKeyClick: (row, col, event) => {
             this.activateKey(row, col, event);
           },
+          onBackgroundClick: () => {
+            if (this.selected) {
+              this.selected = undefined;
+              this.refresh();
+            }
+          },
           onPaintStart: (row, col, event) => {
-            if (!event.altKey) this.dragStart(row, col);
+            if (event.altKey) this.paintKey(row, col, event);
+            else this.dragStart(row, col);
           },
           onPaintEnter: (row, col) => {
             this.dragAdd(row, col);
           },
           onPaintEnd: () => {
-            this.dragEnd();
+            this.dragEnd(true);
+          },
+          onTryPress: (row, col) => {
+            this.tryPress(row, col);
+          },
+          onTryRelease: (row, col) => {
+            this.tryRelease(row, col);
+          },
+          onHover: (hit, event) => {
+            this.showTip(hit, event);
+          },
+          onDrop: (row, col, data) => {
+            this.dropKeycode(row, col, data);
+          },
+          onLayerPick: (layer, key) => {
+            this.setLayer(layer);
+            if (key && this.tab === 'keys') {
+              this.selected = key;
+              this.refresh();
+            }
+          },
+          onReady: () => {
+            this.loader.classList.add('done');
+            setTimeout(() => {
+              this.loader.hidden = true;
+            }, 900);
           },
         });
+        this.k3d.setSplit(this.split);
+        this.k3d.setCase(this.caseOn);
+        this.k3d.setView(this.sceneView);
+        // tests de bout en bout (navigateur piloté) : position écran d'une touche 3D
+        if (navigator.webdriver) {
+          Object.assign(window, {
+            __studio: { keyPoint: (row: number, col: number) => this.k3d?.screenPoint(row, col) },
+          });
+        }
       })
       .catch((error: unknown) => {
         this.k3dFailed = true;
-        this.editStatus(
-          'error',
-          t('kbview.error', { message: error instanceof Error ? error.message : String(error) }),
-        );
+        this.toasts.show(t('kbview.error', { message: errorMessage(error) }), 'warn');
       })
       .finally(() => {
         this.k3dLoading = false;
-        if (this.session === session) this.refresh();
+        if (!this.k3d) this.loader.hidden = true;
+        if (this.session === session) {
+          this.views.set(this.viewChoice());
+          this.refresh();
+          this.layoutScene();
+        }
       });
   }
 
-  /** Clic (ou Entrée) sur une touche, quelle que soit la vue : la choisir, ou la peindre en mode Couleurs. */
+  /** Clic (ou Entrée) sur une touche, quelle que soit la vue, selon l'onglet. */
   private activateKey(row: number, col: number, event: MouseEvent | KeyboardEvent): void {
-    if (this.mode === 'colors') {
+    if (this.tab === 'light') {
       this.paintKey(row, col, event);
       return;
     }
+    if (this.tab === 'try') {
+      this.tryPress(row, col);
+      this.tryRelease(row, col);
+      return;
+    }
     this.selected = { row, col };
+    if (innerWidth <= 820) this.inspector.classList.remove('collapsed');
     this.refresh();
-    this.view?.frame.querySelector<SVGGElement>(`[data-key="${keyId(row, col)}"]`)?.focus();
+    this.planFrame.querySelector<SVGGElement>(`[data-key="${keyId(row, col)}"]`)?.focus();
   }
 
   /** Couleurs sur le dessin affiché (3D ou plan). */
   private showPaints(paints: LedPaints): void {
-    const frame = this.view?.frame;
-    if (!frame) return;
-    if (this.k3d && frame.contains(this.k3d.element)) this.k3d.setPaints(paints);
-    else paintLeds(frame, paints);
+    if (this.k3d) this.k3d.setPaints(paints);
+    else if (this.planKeys) paintLeds(this.planKeys, paints);
   }
 
-  /** Choix de l'éclairage affiché sur le dessin, et état de l'aperçu. */
-  private ledBar(): { element: HTMLElement; status: HTMLElement } {
-    const element = document.createElement('div');
-    element.className = 'led-preview';
-    const display = this.segmented<LedDisplay>(
-      t('led.display'),
-      'led-display',
-      [
-        ['off', t('led.off')],
-        ['layer', t('led.layer'), t('led.layerHint')],
-        ['live', t('led.live'), t('led.liveHint')],
-      ],
-      this.ledDisplay,
-      (value) => {
-        this.ledDisplay = value;
-        saveLedDisplay(value);
-        this.updatePreview();
-        this.showLedState();
-        this.paintPreview();
-      },
-    );
-    const status = document.createElement('p');
-    status.className = 'status';
-    status.id = 'led-status';
-    status.setAttribute('role', 'status');
-    status.setAttribute('aria-live', 'polite');
-    element.append(display, status);
-    return { element, status };
-  }
-
-  /** Lecture paresseuse des couleurs par couche (mode Couleurs ou affichage de la couche). */
+  /** Lecture paresseuse des couleurs par couche (onglet Lumière, affichage de la couche, pile). */
   private ensureLighting(): void {
     const session = this.session;
     if (!session || session.lighting !== undefined || session.lightingLoad) return;
@@ -606,10 +970,7 @@ export class App {
       })
       .catch((error: unknown) => {
         session.lighting = null;
-        this.editStatus(
-          'error',
-          t('colors.loadError', { message: error instanceof Error ? error.message : String(error) }),
-        );
+        this.editStatus('error', t('colors.loadError', { message: errorMessage(error) }));
       })
       .finally(() => {
         session.lightingLoad = undefined;
@@ -620,11 +981,28 @@ export class App {
   private updatePreview(): void {
     const session = this.session;
     if (!session) return;
-    const wantsLayer = this.mode === 'colors' || this.ledDisplay === 'layer';
-    if (this.section === 'keys' && wantsLayer) this.ensureLighting();
-    const run = this.section === 'keys' && (this.ledDisplay !== 'off' || this.mode === 'colors');
+    // les mini-cartes du rail et la pile montrent les couleurs des couches : lues dès la connexion
+    this.ensureLighting();
+    const run = this.ledDisplay !== 'off' || this.tab === 'light';
     if (run) session.preview.start();
     else if (session.preview.active) session.preview.stop();
+  }
+
+  /** Couleurs enregistrées d'une couche (exactes) ; null = transparente (laisse voir l'effet). */
+  private layerPaints(layer: number, live: LedPaints | undefined): Map<string, LedPaint> {
+    const paints = new Map<string, LedPaint>();
+    const session = this.session;
+    const lighting = session?.lighting;
+    if (!session || !lighting) return paints;
+    for (const k of session.keys) {
+      const id = keyId(k.row, k.col);
+      const color = lighting.color(layer, k.row, k.col);
+      if (color === undefined) continue;
+      if (color === null) paints.set(id, live?.get(id) ?? { kind: 'effect' });
+      else if (color[0] || color[1] || color[2]) paints.set(id, { kind: 'on', css: cssColor(color) });
+      else paints.set(id, { kind: 'off' });
+    }
+    return paints;
   }
 
   /**
@@ -633,41 +1011,33 @@ export class App {
    */
   private paintPreview(): void {
     const session = this.session;
-    const view = this.view;
-    if (!session || !view) return;
-    const lighting = session.lighting;
-    const showLayer = Boolean(lighting) && (this.mode === 'colors' || this.ledDisplay === 'layer');
+    if (!session) return;
+    const showLayer = Boolean(session.lighting) && (this.tab === 'light' || this.ledDisplay === 'layer');
     const showLive = this.ledDisplay !== 'off';
     if (!showLayer) {
       this.showPaints(showLive ? this.livePaints : new Map());
       return;
     }
-    const paints = new Map<string, LedPaint>();
-    for (const k of session.keys) {
-      const id = keyId(k.row, k.col);
-      const color = lighting?.color(this.layer, k.row, k.col);
-      if (color === undefined) continue;
-      if (color === null) {
-        const live = showLive ? this.livePaints.get(id) : undefined;
-        paints.set(id, live ?? { kind: 'effect' });
-      } else if (color[0] || color[1] || color[2]) {
-        paints.set(id, { kind: 'on', css: cssColor(color) });
-      } else {
-        paints.set(id, { kind: 'off' });
-      }
-    }
-    this.showPaints(paints);
+    this.showPaints(this.layerPaints(this.layer, showLive ? this.livePaints : undefined));
   }
 
-  private markActiveTab(): void {
-    const tabs = this.view?.tabs;
-    if (!tabs) return;
-    [...tabs.children].forEach((tab, layer) => {
-      const active = layer === this.keyboardLayer;
-      tab.classList.toggle('tab--keyboard', active);
-      if (active) tab.setAttribute('title', t('led.activeTab'));
-      else tab.removeAttribute('title');
-    });
+  private refreshRail(): void {
+    const session = this.session;
+    if (!session) return;
+    this.rail.update(this.layer, this.keyboardLayer);
+    const { client, keys, lighting } = session;
+    for (let layer = 0; layer < client.info.layers; layer++) {
+      const mini: MiniKey[] = keys.map((geometry) => {
+        const code = client.getKey(layer, geometry.row, geometry.col);
+        const color = lighting?.color(layer, geometry.row, geometry.col);
+        return {
+          geometry,
+          kind: code === 0 ? 'none' : code === 1 ? 'transparent' : 'normal',
+          ...(color && (color[0] || color[1] || color[2]) ? { color: cssColor(color) } : {}),
+        };
+      });
+      this.rail.drawMini(layer, mini);
+    }
   }
 
   /** Écrit des LED d'une couche avec historique ; `before` = valeurs à rétablir par Annuler. */
@@ -684,19 +1054,17 @@ export class App {
         this.editStatus(
           'ok',
           t('colors.written', { count: after.size, layer: layerName(session.profile, layer) }),
+          true,
         );
       }
     } catch (error) {
       session.lighting.stage(layer, before);
-      this.editStatus(
-        'error',
-        t('colors.error', { message: error instanceof Error ? error.message : String(error) }),
-      );
+      this.editStatus('error', t('colors.error', { message: errorMessage(error) }));
     }
     this.refresh();
   }
 
-  /** Clic (ou Entrée) en mode Couleurs : peint la touche, ou reprend sa couleur avec Alt. */
+  /** Clic (ou Entrée) dans l'onglet Lumière : peint la touche, ou reprend sa couleur avec Alt. */
   private paintKey(row: number, col: number, event: MouseEvent | KeyboardEvent): void {
     const lighting = this.session?.lighting;
     if (!lighting) return;
@@ -710,6 +1078,20 @@ export class App {
       return;
     }
     const after = new Map([[led, this.brush]]);
+    const before = lighting.stage(this.layer, after);
+    void this.commitColors(this.layer, after, before);
+  }
+
+  /** Remplir la couche, ou la rendre entièrement transparente : une seule entrée d'historique. */
+  private fillLayer(color: LayerColor): void {
+    const session = this.session;
+    const lighting = session?.lighting;
+    if (!session || !lighting) return;
+    const after = new Map<number, LayerColor>();
+    for (const k of session.keys) {
+      const led = lighting.led(k.row, k.col);
+      if (led !== undefined) after.set(led, color);
+    }
     const before = lighting.stage(this.layer, after);
     void this.commitColors(this.layer, after, before);
   }
@@ -733,12 +1115,15 @@ export class App {
     this.paintPreview();
   }
 
-  private dragEnd(): void {
+  /**
+   * Fin du glisser. Sur le plan, le clic qui suit écrit une touche seule (paintKey) ; la 3D n'émet pas de clic
+   * en mode peinture (`commitSingle`), elle écrit donc aussi la touche seule ici.
+   */
+  private dragEnd(commitSingle = false): void {
     const drag = this.drag;
     this.drag = undefined;
     if (!drag) return;
-    // une seule touche : c'est le clic qui suit qui l'écrit (paintKey) ; on retire l'aperçu local
-    if (drag.after.size <= 1) {
+    if (drag.after.size <= 1 && !commitSingle) {
       this.session?.lighting?.stage(drag.layer, drag.before);
       return;
     }
@@ -769,9 +1154,46 @@ export class App {
     });
   }
 
+  /** Dépôt d'un keycode glissé depuis la grille sur une touche du plan. */
+  private attachPlanDrop(svg: SVGSVGElement): void {
+    let over: Element | undefined;
+    const keyOf = (event: DragEvent): SVGGElement | null =>
+      event.target instanceof Element ? event.target.closest<SVGGElement>('[data-key]') : null;
+    svg.addEventListener('dragover', (event) => {
+      if (!event.dataTransfer?.types.includes(KEYCODE_MIME)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+      const key = keyOf(event) ?? undefined;
+      if (key !== over) {
+        over?.classList.remove('is-drop');
+        key?.classList.add('is-drop');
+        over = key;
+      }
+    });
+    svg.addEventListener('dragleave', () => {
+      over?.classList.remove('is-drop');
+      over = undefined;
+    });
+    svg.addEventListener('drop', (event) => {
+      event.preventDefault();
+      over?.classList.remove('is-drop');
+      over = undefined;
+      const [row = 0, col = 0] = (keyOf(event)?.dataset.key ?? '').split(',').map(Number);
+      if (event.dataTransfer && keyOf(event)) this.dropKeycode(row, col, event.dataTransfer);
+    });
+  }
+
+  private dropKeycode(row: number, col: number, data: DataTransfer): void {
+    const code = Number(data.getData(KEYCODE_MIME));
+    if (!Number.isInteger(code) || !data.getData(KEYCODE_MIME)) return;
+    this.selected = { row, col };
+    if (this.tab !== 'keys') this.setTab('keys', false);
+    this.refresh();
+    void this.assign(code);
+  }
+
   private showLedState(): void {
-    const el = this.view?.ledStatus;
-    if (!el) return;
+    const el = this.display.ledStatus;
     const { state, detail } = this.ledState;
     const messages: Record<PreviewState, [Level, string]> = {
       idle: ['info', this.ledDisplay === 'off' ? t('led.idle') : ''],
@@ -814,10 +1236,7 @@ export class App {
   private async loadDynamic(container: HTMLElement): Promise<void> {
     const session = this.session;
     if (!session) return;
-    const loading = document.createElement('p');
-    loading.className = 'status';
-    loading.dataset.level = 'info';
-    loading.textContent = t('dyn.loading');
+    const loading = h('p', { class: 'hint', text: t('dyn.loading') });
     container.replaceChildren(loading);
     try {
       session.dynamic ??= await DynamicState.load(session.client, session.catalog, () =>
@@ -829,7 +1248,7 @@ export class App {
         state: session.dynamic,
         editor: session.editor,
         report: (level, message) => {
-          this.editStatus(level, message);
+          this.editStatus(level, message, level === 'ok');
         },
         onChanged: () => {
           this.refresh();
@@ -837,10 +1256,7 @@ export class App {
       });
       container.replaceChildren(this.dynamicPanel.element);
     } catch (error) {
-      loading.dataset.level = 'error';
-      loading.textContent = t('dyn.loadError', {
-        message: error instanceof Error ? error.message : String(error),
-      });
+      loading.textContent = t('dyn.loadError', { message: errorMessage(error) });
     }
   }
 
@@ -855,72 +1271,12 @@ export class App {
     });
   }
 
-  private rgbContent(session: Session): HTMLElement {
-    const { rgb, client } = session;
-    const supported = client.info.rgb?.supportedEffects;
-    if (!rgb || !supported) {
-      const note = document.createElement('p');
-      note.className = 'status';
-      note.dataset.level = 'info';
-      note.textContent = t('rgb.unsupported');
-      return note;
-    }
-    return renderRgbPanel({
-      controller: rgb,
-      supportedEffects: supported,
-      ledmapLayers: [],
-      onError: (message) => {
-        this.status('error', message);
-      },
-    });
-  }
-
-  private createPicker(session: Session): KeycodePicker {
-    return new KeycodePicker({
-      catalog: session.catalog,
-      layout: this.layout,
-      onPick: (code) => void this.assign(code),
-    });
-  }
-
-  private button(label: string, shortcut: string, onClick: () => void): HTMLButtonElement {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'secondary';
-    button.textContent = label;
-    button.title = `${label} (${shortcut})`;
-    button.addEventListener('click', onClick);
-    return button;
-  }
-
-  /** Met à jour onglets, dessin, détails et boutons à partir de l'état courant. */
-  private refresh(): void {
+  private keyViews(layer: number): KeyView[] {
     const session = this.session;
-    const view = this.view;
-    if (!session || !view) return;
-    const { client, catalog, keys, profile, editor } = session;
-
-    view.tabs.replaceChildren(
-      ...Array.from({ length: client.info.layers }, (_, layer) => {
-        const tab = document.createElement('button');
-        tab.type = 'button';
-        tab.setAttribute('role', 'tab');
-        tab.setAttribute('aria-selected', String(layer === this.layer));
-        tab.textContent = `${String(layer)} · ${layerName(profile, layer)}`;
-        tab.addEventListener('click', () => {
-          this.layer = layer;
-          this.refresh();
-        });
-        return tab;
-      }),
-    );
-    this.markActiveTab();
-    for (const button of view.modeButtons.querySelectorAll('button')) {
-      button.setAttribute('aria-checked', String(button.dataset.value === this.mode));
-    }
-
-    const views: KeyView[] = keys.map((geometry) => {
-      const code = client.getKey(this.layer, geometry.row, geometry.col);
+    if (!session) return [];
+    const { client, catalog, keys } = session;
+    return keys.map((geometry) => {
+      const code = client.getKey(layer, geometry.row, geometry.col);
       return {
         geometry,
         label: keyLabel(catalog, code, this.layout),
@@ -928,77 +1284,250 @@ export class App {
         kind: code === 0 ? 'none' : code === 1 ? 'transparent' : 'normal',
       };
     });
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Rafraîchissement
+  // ---------------------------------------------------------------------------------------------
+
+  /** Met à jour rail, dessin, inspecteur et boutons à partir de l'état courant. */
+  private refresh(): void {
+    const session = this.session;
+    const ws = this.ws;
+    if (!session || !ws) return;
+    const { client, editor } = session;
+
+    this.refreshRail();
+    this.views.set(this.viewChoice());
+    const views = this.keyViews(this.layer);
     const selected = this.selected ? keyId(this.selected.row, this.selected.col) : undefined;
-    const use3d = this.keyboardView === '3d' && !this.k3dFailed;
+    const use3d = this.viewChoice() !== 'plan';
     if (!use3d && this.k3d) {
       this.k3d.dispose();
       this.k3d = undefined;
     }
-    if (use3d && this.k3d) {
-      if (this.k3d.element.parentElement !== view.frame) view.frame.replaceChildren(this.k3d.element);
+    if (use3d) {
+      // 3D (ou son chargement, avec le loader) : le plan n'est pas dessiné
+      this.planFrame.hidden = true;
+      this.planFrame.replaceChildren();
+      this.planKeys = undefined;
+    }
+    if (use3d && !this.k3d) {
+      this.load3d(session);
+    } else if (this.k3d) {
+      if (this.k3d.element.parentElement !== this.stage) this.stage.prepend(this.k3d.element);
       this.k3d.setState({
         views,
-        selected: this.mode === 'keys' ? selected : undefined,
+        selected: this.tab === 'keys' ? selected : undefined,
         layer: this.layer,
-        paintMode: this.mode === 'colors',
+        mode: this.sceneMode(),
       });
+      if (this.sceneView === 'stack') this.k3d.setStack(this.stackLayers());
     } else {
-      // plan SVG : vue choisie, ou en attendant le chargement de la 3D
+      // plan SVG : vue choisie, ou WebGL indisponible
       const keyboard = renderKeyboard({
         keys: views,
-        ...(selected && this.mode === 'keys' ? { selected } : {}),
+        ...(selected && this.tab === 'keys' ? { selected } : {}),
         onSelect: (row, col, event) => {
           this.activateKey(row, col, event);
         },
       });
-      if (this.mode === 'colors') {
+      if (this.tab === 'light') {
         keyboard.classList.add('keyboard--paint');
         this.attachPaintDrag(keyboard);
       }
-      view.frame.replaceChildren(keyboard);
-      if (use3d) this.load3d(session);
+      this.attachPlanDrop(keyboard);
+      this.planKeys = keyboard;
+      this.planFrame.replaceChildren(keyboard);
+      this.planFrame.hidden = false;
     }
     this.paintPreview();
-    this.renderColorBox(session, view);
 
-    if (this.selected) {
-      const code = client.getKey(this.layer, this.selected.row, this.selected.col);
-      view.details.textContent = t('key.selected', {
-        layer: layerName(profile, this.layer),
-        position: keyId(this.selected.row, this.selected.col),
-        name: catalog.tooltip(code),
-      });
-    } else {
-      view.details.textContent = t('key.none');
-    }
-    view.undo.disabled = !editor.canUndo;
-    view.redo.disabled = !editor.canRedo;
-    view.picker.setEnabled(Boolean(this.selected));
-    view.picker.element.hidden = this.mode === 'colors';
-    view.details.hidden = this.mode === 'colors';
+    if (this.tab === 'keys') this.renderKeyHead(session, ws);
+    if (this.tab === 'light') this.renderColorBox(session, ws);
+    if (this.tab === 'try') this.renderTry(session, ws);
+
+    this.undoButton.hidden = !editor.canUndo;
+    this.redoButton.hidden = !editor.canRedo;
+    ws.picker.setEnabled(Boolean(this.selected));
+    ws.picker.setCurrent(
+      this.selected ? client.getKey(this.layer, this.selected.row, this.selected.col) : undefined,
+    );
+    const hint = ws.picker.element.parentElement?.querySelector('#picker-hint');
+    if (hint) hint.textContent = this.selected ? t('picker.hintSelected') : t('picker.hintDrag');
   }
 
-  /** Panneau du mode Couleurs, reconstruit seulement quand la couche ou l'état de chargement change. */
-  private renderColorBox(session: Session, view: WorkspaceView): void {
-    view.colorBox.hidden = this.mode !== 'colors';
-    if (this.mode !== 'colors') {
-      this.colorPanelKey = '';
+  private stackLayers(): StackLayer[] {
+    const session = this.session;
+    if (!session) return [];
+    return Array.from({ length: session.client.info.layers }, (_, layer) => ({
+      views: this.keyViews(layer),
+      paints: this.layerPaints(layer, undefined),
+      tint: layerTint(session.profile, layer),
+      name: layerName(session.profile, layer),
+    }));
+  }
+
+  /** Onglet Touches : touche choisie (ou état vide) et la couche affichée. */
+  private renderKeyHead(session: Session, ws: Workspace): void {
+    const { client, catalog, profile, keymap } = session;
+    const name = layerName(profile, this.layer);
+    if (!this.selected) {
+      let assigned = 0;
+      let transparent = 0;
+      for (const k of session.keys) {
+        const code = client.getKey(this.layer, k.row, k.col);
+        if (code === 1) transparent++;
+        else if (code !== 0) assigned++;
+      }
+      ws.keyHead.replaceChildren(
+        h(
+          'div',
+          { class: 'empty' },
+          icon('keyboard', 34, 1.5),
+          h('b', { text: t('key.noneTitle') }),
+          h('span', { text: t('key.none') }),
+        ),
+        h('div', { class: 'h', text: name }),
+        h(
+          'div',
+          { class: 'group' },
+          this.infoItem(t('key.access'), this.accessText(session, this.layer)),
+          this.infoItem(t('key.count'), t('key.countValue', { assigned, transparent })),
+        ),
+      );
       return;
     }
+    const { row, col } = this.selected;
+    const own = client.getKey(this.layer, row, col);
+    const resolved = own === 1 ? resolveKey(keymap, this.layer, row, col) : { code: own, layer: this.layer };
+    const label = keyLabel(catalog, resolved.code, this.layout);
+    const title =
+      own === 0
+        ? t('key.empty')
+        : own === 1
+          ? `▽ ${flatLabel(label)}`
+          : flatLabel(label) || catalog.serialize(own);
+    const led = session.lighting?.led(row, col);
+    const ledColor = session.lighting?.color(this.layer, row, col);
+    const geometry = session.keys.find((k) => k.row === row && k.col === col);
+    const halves = profile?.model3d?.outlines.length === 2;
+    const half =
+      halves && geometry
+        ? geometry.x + geometry.w / 2 < Math.max(...session.keys.map((k) => k.x + k.w)) / 2
+          ? t('key.left')
+          : t('key.right')
+        : '';
+    const cap = this.keycap(
+      label,
+      own,
+      ledColor && (ledColor[0] || ledColor[1] || ledColor[2]) ? cssColor(ledColor) : undefined,
+    );
+    const across = Array.from({ length: client.info.layers }, (_, layer) => {
+      const code = client.getKey(layer, row, col);
+      const text =
+        code === 0
+          ? '—'
+          : code === 1
+            ? '▽'
+            : flatLabel(keyLabel(catalog, code, this.layout)) || catalog.serialize(code);
+      const button = h(
+        'button',
+        { type: 'button', class: `item${layer === this.layer ? ' is-cur' : ''}`, 'data-goto': layer },
+        h('span', { class: 'k' }, this.tintDot(layerTint(profile, layer)), layerName(profile, layer)),
+        h('span', { class: 'v', text }),
+      );
+      button.addEventListener('click', () => {
+        this.setLayer(layer);
+      });
+      return button;
+    });
+    ws.keyHead.replaceChildren(
+      h(
+        'div',
+        { class: 'keyhead' },
+        cap,
+        h(
+          'div',
+          { style: 'min-width:0' },
+          h('div', { class: 't', text: title }),
+          h('div', {
+            class: 's',
+            text:
+              own === 1
+                ? t('key.inherited', { layer: layerName(profile, resolved.layer) })
+                : catalog.tooltip(own),
+          }),
+        ),
+      ),
+      h(
+        'div',
+        { class: 'group' },
+        this.infoItem(t('key.keycode'), catalog.serialize(own), true),
+        this.infoItem(t('key.matrix'), `[${keyId(row, col)}]${half ? ` · ${half}` : ''}`),
+        led !== undefined ? this.infoItem(t('key.led'), t('key.ledValue', { n: led })) : null,
+        this.infoItem(t('key.layer'), name),
+      ),
+      h('div', { class: 'h', text: t('key.across') }),
+      h('div', { class: 'group' }, ...across),
+    );
+  }
+
+  private keycap(label: KeyLabel, code: number, led: string | undefined): HTMLElement {
+    const main = code === 0 ? '' : label.main.replaceAll('\n', ' ');
+    const cap = h(
+      'div',
+      {
+        class: `keycap${main.length > 3 ? ' is-long' : ''}${code === 1 ? ' is-trns' : ''}`,
+        'aria-hidden': 'true',
+      },
+      main,
+      label.shift ? h('small', { class: 'ks', text: label.shift }) : null,
+      label.altgr ? h('small', { class: 'ka', text: label.altgr }) : null,
+    );
+    if (led) cap.style.setProperty('--led', led);
+    return cap;
+  }
+
+  private infoItem(label: string, value: string, code = false): HTMLElement {
+    return h(
+      'div',
+      { class: 'item' },
+      h('span', { text: label }),
+      h(code ? 'code' : 'span', { class: code ? undefined : 'v', text: value }),
+    );
+  }
+
+  private tintDot(tint: string): HTMLElement {
+    const dot = h('span', { class: 'tdot' });
+    dot.style.background = tint;
+    return dot;
+  }
+
+  /** Accès à une couche, lu dans la keymap (MO, TO, LT… posés sur les autres couches). */
+  private accessText(session: Session, layer: number): string {
+    const accesses = layerAccesses(session.keymap, layer);
+    if (!accesses.length) {
+      if (layer === 0) return t('key.accessDefault');
+      const triple = tripleTap(session.profile);
+      return triple?.layer === layer ? triple.label : t('key.accessNone');
+    }
+    const parts = [...new Set(accesses.map((a) => `${a.kind} · ${layerName(session.profile, a.from)}`))];
+    return parts.slice(0, 2).join(', ') + (parts.length > 2 ? '…' : '');
+  }
+
+  /** Onglet Lumière, reconstruit seulement quand la couche ou l'état de chargement change. */
+  private renderColorBox(session: Session, ws: Workspace): void {
     const state = session.lighting === undefined ? 'loading' : session.lighting ? 'ready' : 'none';
     const key = `${String(this.layer)}:${state}`;
     if (key === this.colorPanelKey) return;
     this.colorPanelKey = key;
     if (state === 'loading') {
-      const loading = document.createElement('p');
-      loading.className = 'status';
-      loading.dataset.level = 'info';
-      loading.textContent = t('colors.loading');
-      view.colorBox.replaceChildren(loading);
+      ws.colorBox.replaceChildren(h('p', { class: 'hint', text: t('colors.loading') }));
       return;
     }
     const name = layerName(session.profile, this.layer);
-    view.colorBox.replaceChildren(
+    ws.colorBox.replaceChildren(
       renderColorPanel({
         lighting: session.lighting ?? undefined,
         layer: this.layer,
@@ -1007,18 +1536,32 @@ export class App {
         onBrush: (brush) => {
           this.brush = brush;
         },
-        globalRgb: () => this.rgbContent(session),
-        globalMode: () => ({
-          ...(session.rgb?.mode ?? { effect: 0, speed: 0, hue: 0, saturation: 0, value: 0 }),
-        }),
+        onFill: (color) => {
+          this.fillLayer(color);
+        },
+        globalRgb: session.rgb,
         supportedEffects: session.client.info.rgb?.supportedEffects ?? [],
         maxBrightness: session.client.info.rgb?.info.maxBrightness ?? 255,
+        previews: ws.previews,
+        onLightingToggle: (on) => {
+          this.toggleLighting(on);
+        },
         onReset: () => void this.resetColors(name),
         onError: (message) => {
           this.editStatus('error', message);
         },
       }),
     );
+  }
+
+  /** Interrupteur « Éclairage allumé » : effet OFF, ou retour au dernier effet allumé. */
+  private toggleLighting(on: boolean): void {
+    const rgb = this.session?.rgb;
+    if (!rgb) return;
+    if (!on && rgb.mode.effect !== 0) this.lastEffect = rgb.mode.effect;
+    rgb.update({ effect: on ? this.lastEffect : 0 });
+    this.colorPanelKey = '';
+    this.refresh();
   }
 
   private async resetColors(name: string): Promise<void> {
@@ -1033,19 +1576,224 @@ export class App {
       await lighting.reset(layer);
       this.editStatus('ok', t('colors.resetDone', { layer: name }));
     } catch (error) {
-      this.editStatus(
-        'error',
-        t('colors.error', { message: error instanceof Error ? error.message : String(error) }),
-      );
+      this.editStatus('error', t('colors.error', { message: errorMessage(error) }));
     }
     this.colorPanelKey = '';
     this.refresh();
   }
 
-  private editStatus(level: Level, message: string): void {
-    if (!this.view) return;
-    this.view.editStatus.dataset.level = level;
-    this.view.editStatus.textContent = message;
+  // ---------------------------------------------------------------------------------------------
+  // Essai : simulation des couches sur la keymap réelle
+  // ---------------------------------------------------------------------------------------------
+
+  private renderTry(session: Session, ws: Workspace): void {
+    const clear = h('button', {
+      type: 'button',
+      class: 'cat',
+      id: 'try-clear',
+      style: 'height:24px;margin-right:-6px',
+      text: t('try.clear'),
+    });
+    clear.addEventListener('click', () => {
+      this.tryOutput = [];
+      this.renderTryOutput();
+    });
+    const triple = tripleTap(session.profile);
+    const active = session.sim.activeLayers;
+    ws.tryBox.replaceChildren(
+      h('p', { class: 'hint', style: 'font-size:13px;padding-top:4px', text: t('try.help') }),
+      h('div', { class: 'h' }, h('span', { text: t('try.output') }), clear),
+      h('div', { class: 'group output', id: 'try-output', 'aria-live': 'polite' }),
+      h('div', { class: 'h', text: t('try.active') }),
+      h(
+        'div',
+        { class: 'group' },
+        ...active
+          .slice()
+          .reverse()
+          .map((layer) =>
+            h(
+              'div',
+              { class: 'item' },
+              h(
+                'span',
+                { class: 'k' },
+                this.tintDot(layerTint(session.profile, layer)),
+                layerName(session.profile, layer),
+              ),
+              h('span', { class: 'v', text: layer === this.layer ? t('try.shown') : t('try.below') }),
+            ),
+          ),
+      ),
+      h('div', { class: 'h', text: t('try.rules') }),
+      h(
+        'div',
+        { class: 'group' },
+        this.ruleItem('MO(n)', t('try.ruleMo')),
+        this.ruleItem('TO(n)', t('try.ruleTo')),
+        triple ? this.ruleItem(triple.label, t('try.ruleTriple')) : null,
+        this.ruleItem('QK_BOOT, RM_*', t('try.ruleOther')),
+      ),
+    );
+    this.renderTryOutput();
+  }
+
+  private ruleItem(code: string, text: string): HTMLElement {
+    return h('div', { class: 'item' }, h('code', { text: code }), h('span', { class: 'v', text }));
+  }
+
+  private renderTryOutput(): void {
+    const out = this.root.querySelector('#try-output');
+    if (!out) return;
+    out.replaceChildren(
+      ...this.tryOutput.map((item) =>
+        item.tok ? h('span', { class: 'tok', text: item.tok }) : (item.ch ?? ''),
+      ),
+      h('span', { class: 'caret' }),
+    );
+    out.scrollTop = out.scrollHeight;
+  }
+
+  private tryPress(row: number, col: number): void {
+    const session = this.session;
+    if (!session) return;
+    this.k3d?.press(row, col);
+    const event = session.sim.press(row, col);
+    if (event.kind === 'layer') {
+      if (event.layer !== this.layer) {
+        this.layer = event.layer;
+        this.toasts.show(t('try.layer', { layer: layerName(session.profile, event.layer), via: event.via }));
+      }
+      this.refresh();
+      return;
+    }
+    if (event.kind === 'boot') {
+      this.toasts.show(t('try.boot'), 'warn');
+      return;
+    }
+    if (event.kind !== 'key') return;
+    const code = event.code;
+    const usage = code & 0xff;
+    const name = session.catalog.serialize(code);
+    if (code === 0x2a) this.tryOutput.pop();
+    else if (code === 0x28) this.tryOutput.push({ ch: '\n' });
+    else if (code === 0x2c) this.tryOutput.push({ ch: ' ' });
+    else {
+      const label = keyLabel(session.catalog, code, this.layout);
+      const main = label.main.replaceAll('\n', ' ');
+      const printable = code < 0x2000 && PRINTABLE(usage);
+      if (printable && Array.from(main).length === 1)
+        this.tryOutput.push({ ch: code < 0x100 ? main.toLowerCase() : main });
+      else this.tryOutput.push({ tok: flatLabel(label) || name });
+    }
+    if (this.tryOutput.length > 400) this.tryOutput.splice(0, 100);
+    this.renderTryOutput();
+  }
+
+  private tryRelease(row: number, col: number): void {
+    const session = this.session;
+    if (!session) return;
+    this.k3d?.release(row, col);
+    if (session.sim.release(row, col) && session.sim.layer !== this.layer) {
+      this.layer = session.sim.layer;
+      this.refresh();
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Frappes du vrai clavier : touche retrouvée dans la keymap, appui animé, défilant, lueur Siri
+  // ---------------------------------------------------------------------------------------------
+
+  private findPhysical(code: string): { row: number; col: number; label: string } | undefined {
+    const session = this.session;
+    if (!session) return undefined;
+    const usages = hidUsages(code);
+    if (!usages.length) return undefined;
+    const layers = [...new Set([this.keyboardLayer ?? this.layer, this.layer, 0])];
+    for (const layer of layers) {
+      for (const usage of usages) {
+        for (const k of session.keys) {
+          const resolved = resolveKey(session.keymap, layer, k.row, k.col);
+          if (sendsUsage(resolved.code, usage)) {
+            const label = flatLabel(keyLabel(session.catalog, resolved.code, this.layout));
+            return { row: k.row, col: k.col, label };
+          }
+        }
+      }
+    }
+    return undefined;
+  }
+
+  private mirrorKey(event: KeyboardEvent): void {
+    if (event.repeat || this.physical.has(event.code)) return;
+    const key = this.findPhysical(event.code);
+    if (!key) return;
+    this.physical.set(event.code, { row: key.row, col: key.col });
+    this.k3d?.press(key.row, key.col);
+    this.glow(1400);
+    const kbd = h('kbd', { text: key.label || '·' });
+    this.ticker.append(kbd);
+    while (this.ticker.children.length > 7) this.ticker.firstElementChild?.remove();
+    this.ticker.classList.remove('idle');
+    clearTimeout(this.tickerTimer);
+    this.tickerTimer = window.setTimeout(() => {
+      this.ticker.classList.add('idle');
+      setTimeout(() => {
+        if (this.ticker.classList.contains('idle')) this.ticker.replaceChildren();
+      }, 450);
+    }, 1800);
+  }
+
+  private glow(ms: number): void {
+    if (REDUCED_MOTION) return;
+    this.siri.classList.add('on');
+    clearTimeout(this.siriTimer);
+    this.siriTimer = window.setTimeout(() => {
+      this.siri.classList.remove('on');
+    }, ms);
+  }
+
+  private showTip(hit: SceneHit | undefined, event: PointerEvent): void {
+    const session = this.session;
+    if (!hit || !session || event.pointerType !== 'mouse' || this.drag) {
+      this.tip.hidden = true;
+      return;
+    }
+    const layer = hit.layer ?? this.layer;
+    const own = session.client.getKey(layer, hit.row, hit.col);
+    const resolved = own === 1 ? resolveKey(session.keymap, layer, hit.row, hit.col).code : own;
+    const label = flatLabel(keyLabel(session.catalog, resolved, this.layout));
+    const extra = hit.layer !== undefined ? ` · ${layerName(session.profile, layer)}` : '';
+    this.tip.replaceChildren(
+      h('b', {
+        text: own === 0 ? t('key.empty') : own === 1 ? `▽ ${label}` : label || session.catalog.serialize(own),
+      }),
+      h('br'),
+      h('code', { text: `${session.catalog.serialize(own)} · [${keyId(hit.row, hit.col)}]${extra}` }),
+    );
+    this.tip.hidden = false;
+    const width = this.tip.offsetWidth;
+    const height = this.tip.offsetHeight;
+    let x = event.clientX + 16;
+    let y = event.clientY + 18;
+    if (x + width > innerWidth - 8) x = event.clientX - width - 12;
+    if (y + height > innerHeight - 8) y = event.clientY - height - 12;
+    this.tip.style.transform = `translate(${String(x)}px, ${String(y)}px)`;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Édition
+  // ---------------------------------------------------------------------------------------------
+
+  /** Message d'édition : région annoncée (lecteurs d'écran, tests) et pastille, avec Annuler si possible. */
+  private editStatus(level: Level, message: string, undoable = false): void {
+    this.editStatusEl.dataset.level = level;
+    this.editStatusEl.textContent = message;
+    const action: ToastAction | undefined =
+      undoable && this.session?.editor.canUndo
+        ? { label: t('edit.undo'), run: () => void this.travel('undo') }
+        : undefined;
+    this.toasts.show(message, level, action);
   }
 
   private describe(change: Pick<KeyChange, 'layer' | 'row' | 'col'>, code: number): Record<string, string> {
@@ -1098,23 +1846,12 @@ export class App {
             : t('edit.replaced', { requested: name, stored: catalog.serialize(result.stored) }),
         );
       } else {
-        this.editStatus('ok', t('edit.written', this.describe(position, result.stored)));
+        this.editStatus('ok', t('edit.written', this.describe(position, result.stored)), true);
       }
     } catch (error) {
-      this.editStatus(
-        'error',
-        t('edit.error', { message: error instanceof Error ? error.message : String(error) }),
-      );
+      this.editStatus('error', t('edit.error', { message: errorMessage(error) }));
     }
     this.refresh();
-  }
-
-  private async undo(): Promise<void> {
-    await this.travel('undo');
-  }
-
-  private async redo(): Promise<void> {
-    await this.travel('redo');
   }
 
   private async travel(direction: 'undo' | 'redo'): Promise<void> {
@@ -1148,10 +1885,7 @@ export class App {
       }
       this.dynamicPanel?.refresh();
     } catch (error) {
-      this.editStatus(
-        'error',
-        t('edit.error', { message: error instanceof Error ? error.message : String(error) }),
-      );
+      this.editStatus('error', t('edit.error', { message: errorMessage(error) }));
     }
     this.refresh();
   }
@@ -1162,23 +1896,188 @@ export class App {
     return `M${String(change.index)}`;
   }
 
-  private onShortcut(event: KeyboardEvent): void {
-    if (!this.session || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+  // ---------------------------------------------------------------------------------------------
+  // Clavier de l'ordinateur : raccourcis, palette, miroir des frappes
+  // ---------------------------------------------------------------------------------------------
+
+  private onKeyDown(event: KeyboardEvent): void {
+    const mod = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
+    if (mod && !event.altKey && key === 'k') {
+      event.preventDefault();
+      if (this.palette.open) this.palette.close();
+      else this.palette.show();
+      return;
+    }
+    if (this.palette.open) return;
+    if (event.key === 'Escape') {
+      if (!this.device.hidden) this.device.hidden = true;
+      if (this.display.open) {
+        this.display.toggle(false);
+        this.displayButton.setAttribute('aria-expanded', 'false');
+      }
+    }
     const target = event.target;
     if (
       target instanceof HTMLInputElement ||
       target instanceof HTMLTextAreaElement ||
-      target instanceof HTMLSelectElement
+      target instanceof HTMLSelectElement ||
+      document.querySelector('dialog[open]')
     ) {
       return;
     }
-    const key = event.key.toLowerCase();
-    if (key === 'z' && !event.shiftKey) {
-      event.preventDefault();
-      void this.undo();
-    } else if ((key === 'z' && event.shiftKey) || key === 'y') {
-      event.preventDefault();
-      void this.redo();
+    if (!this.session) return;
+    if (mod && !event.altKey) {
+      if (key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        void this.travel('undo');
+      } else if ((key === 'z' && event.shiftKey) || key === 'y') {
+        event.preventDefault();
+        void this.travel('redo');
+      }
+      return;
     }
+    if (this.device.hidden) this.mirrorKey(event);
+  }
+
+  private onKeyUp(event: KeyboardEvent): void {
+    const key = this.physical.get(event.code);
+    if (!key) return;
+    this.physical.delete(event.code);
+    this.k3d?.release(key.row, key.col);
+  }
+
+  private commands(): Command[] {
+    const session = this.session;
+    const list: Command[] = [];
+    if (session) {
+      for (let layer = 0; layer < session.client.info.layers; layer++) {
+        list.push({
+          label: layerName(session.profile, layer),
+          hint: t('palette.layer', { n: layer }),
+          run: () => {
+            this.setLayer(layer);
+          },
+        });
+      }
+      for (const [view, label] of VIEWS)
+        list.push({
+          label: t(label),
+          hint: t('palette.view'),
+          run: () => {
+            this.setView(view);
+          },
+        });
+      list.push(
+        {
+          label: t('palette.tabKeys'),
+          hint: t('palette.tab'),
+          run: () => {
+            this.setTab('keys');
+          },
+        },
+        {
+          label: t('palette.tabLight'),
+          hint: t('palette.tab'),
+          run: () => {
+            this.setTab('light');
+          },
+        },
+        {
+          label: t('palette.tabDynamic'),
+          hint: t('palette.tab'),
+          run: () => {
+            this.setTab('dynamic');
+          },
+        },
+        {
+          label: t('palette.tabTry'),
+          hint: t('palette.tab'),
+          run: () => {
+            this.setTab('try');
+          },
+        },
+      );
+      for (const [value, label] of [
+        ['layer', 'led.layer'],
+        ['live', 'led.live'],
+        ['off', 'led.off'],
+      ] as const) {
+        list.push({
+          label: t(label),
+          hint: t('led.display'),
+          run: () => {
+            this.ledDisplay = value;
+            saveLedDisplay(value);
+            this.display.setLed(value);
+            this.updatePreview();
+            this.showLedState();
+            this.paintPreview();
+          },
+        });
+      }
+      const rgb = session.rgb;
+      if (rgb) {
+        for (const id of session.client.info.rgb?.supportedEffects ?? []) {
+          if (id === 0) continue;
+          list.push({
+            label: effectName(id),
+            hint: t('palette.effect'),
+            run: () => {
+              rgb.update({ effect: id });
+              this.colorPanelKey = '';
+              this.refresh();
+              this.toasts.show(t('palette.effectSet', { name: effectName(id) }));
+            },
+          });
+        }
+        list.push({
+          label: rgb.mode.effect ? t('palette.lightOff') : t('palette.lightOn'),
+          hint: 'RM_TOGG',
+          run: () => {
+            this.toggleLighting(rgb.mode.effect === 0);
+          },
+        });
+      }
+      list.push(
+        { label: t('palette.undo'), hint: 'Ctrl Z', run: () => void this.travel('undo') },
+        { label: t('palette.redo'), hint: 'Ctrl Maj Z', run: () => void this.travel('redo') },
+        {
+          label: t('palette.backup'),
+          hint: t('view.backup'),
+          run: () => {
+            this.openScrim(this.device);
+          },
+        },
+        {
+          label: this.caseOn ? t('palette.caseOff') : t('palette.caseOn'),
+          hint: t('display.case'),
+          run: () => {
+            this.caseOn = !this.caseOn;
+            this.display.setCase(this.caseOn);
+            this.k3d?.setCase(this.caseOn);
+          },
+        },
+        {
+          label: t('display.reset'),
+          hint: t('display.geometry'),
+          run: () => {
+            this.display.resetSplit();
+          },
+        },
+      );
+    }
+    list.push(
+      { label: t('connect.button'), hint: 'WebHID', run: () => void this.connect() },
+      { label: t('demo.button'), hint: t('pill.demo'), run: () => void this.startDemo() },
+      {
+        label: t('palette.display'),
+        hint: t('display.title'),
+        run: () => {
+          this.display.toggle(true);
+        },
+      },
+    );
+    return list;
   }
 }

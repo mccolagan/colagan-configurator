@@ -3,7 +3,7 @@ import { t } from './index';
 
 describe('t', () => {
   it('renvoie le texte français', () => {
-    expect(t('app.title')).toBe('Colagan Configurator');
+    expect(t('app.title')).toBe('Colagan Studio');
   });
 
   it('remplace les paramètres et laisse les inconnus intacts', () => {

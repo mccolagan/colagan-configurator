@@ -16,10 +16,12 @@ test('étiquettes AZERTY par défaut, bascule QWERTY mémorisée', async ({ page
   await expect(key(page, '5,0')).toContainText('-');
   await expect(key(page, '5,0').locator('.key__shift')).toHaveText('6');
   await expect(key(page, '5,0').locator('.key__altgr')).toHaveText('|');
-  await page.locator('#labels').selectOption('qwerty');
+  await page.getByRole('button', { name: 'Affichage' }).click();
+  await page.getByRole('radio', { name: 'QWERTY' }).click();
   await expect(key(page, '5,0')).toContainText('^6');
   await page.reload();
-  await expect(page.locator('#labels')).toHaveValue('qwerty');
+  await page.getByRole('button', { name: 'Affichage' }).click();
+  await expect(page.getByRole('radio', { name: 'QWERTY' })).toHaveAttribute('aria-checked', 'true');
 });
 
 test('affecter une touche, annuler puis rétablir', async ({ page }) => {
@@ -29,7 +31,7 @@ test('affecter une touche, annuler puis rétablir', async ({ page }) => {
   await expect(page.locator('#key-details')).toContainText('KC_Q');
   await expect(page.locator('#edit-status')).toContainText('KC_Q');
 
-  await page.getByRole('button', { name: 'Annuler' }).click();
+  await page.locator('#undo').click();
   await expect(page.locator('#key-details')).toContainText('KC_6');
   await expect(page.locator('#redo')).toBeEnabled();
 
@@ -37,6 +39,12 @@ test('affecter une touche, annuler puis rétablir', async ({ page }) => {
   await expect(page.locator('#key-details')).toContainText('KC_Q');
   await page.locator('body').press('Control+z');
   await expect(page.locator('#key-details')).toContainText('KC_6');
+});
+
+test('glisser un keycode sur une touche l’affecte', async ({ page }) => {
+  await page.locator('[data-keycode="KC_Q"]').dragTo(key(page, '5,0'));
+  await expect(key(page, '5,0')).toContainText('A');
+  await expect(page.locator('#key-details')).toContainText('KC_Q');
 });
 
 test('recherche par caractère AZERTY', async ({ page }) => {

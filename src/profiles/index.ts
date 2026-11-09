@@ -7,8 +7,19 @@ export interface Model3D {
   readonly outlines: readonly (readonly (readonly [number, number])[])[];
   /** Couleur du vernis du PCB, visible sur la tranche entre le dessus et le fond de la coque. */
   readonly pcbColor?: string;
-  /** Microcontrôleurs visibles au-dessus de la coque (centre en unités de touche). */
-  readonly boards?: readonly { readonly x: number; readonly y: number; readonly label: string }[];
+  /** Microcontrôleurs visibles au-dessus de la coque (centre en unités de touche) ; wireless = module radio. */
+  readonly boards?: readonly {
+    readonly x: number;
+    readonly y: number;
+    readonly label: string;
+    readonly wireless?: boolean;
+  }[];
+  /** Prises USB-C du lien entre moitiés : bord de carte (x), hauteur (y), sens de sortie du câble (-1 = vers la gauche). */
+  readonly links?: readonly { readonly edge: number; readonly y: number; readonly out: -1 | 1 }[];
+  /** Trous de fixation (centre), sérigraphiés sur le PCB. */
+  readonly holes?: readonly (readonly [number, number])[];
+  /** Texte sérigraphié sur le PCB (centre de la première ligne). */
+  readonly silk?: readonly { readonly x: number; readonly y: number; readonly lines: readonly string[] }[];
 }
 
 export interface KeyboardProfile {
