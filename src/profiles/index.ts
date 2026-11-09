@@ -1,4 +1,15 @@
 // Profils connus, identifiés par l'UID Vial. Un clavier inconnu fonctionne avec des valeurs génériques.
+import { COLAGAN_V2_MODEL } from './colagan-v2-model';
+
+/** Habillage de la vue 3D ; sans lui, une coque rectangulaire entoure les touches. */
+export interface Model3D {
+  /** Contour de chaque carte (et de la coque), en unités de touche, dans le repère de la disposition KLE. */
+  readonly outlines: readonly (readonly (readonly [number, number])[])[];
+  /** Couleur du vernis du PCB, visible sur la tranche entre le dessus et le fond de la coque. */
+  readonly pcbColor?: string;
+  /** Microcontrôleurs visibles au-dessus de la coque (centre en unités de touche). */
+  readonly boards?: readonly { readonly x: number; readonly y: number; readonly label: string }[];
+}
 
 export interface KeyboardProfile {
   readonly id: string;
@@ -7,6 +18,7 @@ export interface KeyboardProfile {
   readonly ledmapLayers?: readonly number[];
   /** Keycodes propres au firmware qui font sortir d'une couche (ex. SEL x3 -> sélecteur). */
   readonly exitKeycodes?: readonly number[];
+  readonly model3d?: Model3D;
 }
 
 /** Colagan V2 : VIAL_KEYBOARD_UID {0x0E, 0xDC, 0x42, 0x07, 0xFC, 0x15, 0xEE, 0xC7} lu en little-endian. */
@@ -18,6 +30,7 @@ const COLAGAN_V2: KeyboardProfile = {
   ledmapLayers: [2, 3, 4, 5],
   // USER00 = SEL x3 : trois appuis ouvrent le sélecteur, qui a ses TO()
   exitKeycodes: [0x7e00],
+  model3d: COLAGAN_V2_MODEL,
 };
 
 export function profileFor(uid: bigint): KeyboardProfile | undefined {

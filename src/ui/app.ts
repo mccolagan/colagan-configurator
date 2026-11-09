@@ -1,6 +1,7 @@
 import { createDemoKeyboard } from '../demo/demo-keyboard';
 import { detectHidSupport, type HidSupport } from '../env/support';
 import { readLabelLayout, saveLabelLayout } from '../env/label-layout';
+import { readKeyboardView, saveKeyboardView, type KeyboardViewPref } from '../env/keyboard-view-pref';
 import { readLedDisplay, saveLedDisplay, type LedDisplay } from '../env/led-preview-pref';
 import { applyTheme, readTheme, type ThemeChoice } from '../env/theme';
 import { DynamicState } from '../editor/dynamic-state';
@@ -26,6 +27,7 @@ import type { Transport } from '../protocol/packet';
 import { HidTransport } from '../transport/hid-transport';
 import { confirmDialog } from './confirm';
 import { keyId, paintLeds, renderKeyboard, type KeyView } from './keyboard-view';
+import type { Keyboard3D } from './keyboard-3d/keyboard-3d';
 import { KeycodePicker, RISKY_KEYCODES } from './keycode-picker';
 import { renderBackupPanel } from './backup-panel';
 import { DynamicPanel } from './dynamic-panel';
@@ -94,6 +96,11 @@ export class App {
   private dynamicPanel: DynamicPanel | undefined;
   private ledDisplay: LedDisplay = readLedDisplay();
   private ledState: { state: PreviewState; detail?: string } = { state: 'idle' };
+  private keyboardView: KeyboardViewPref = readKeyboardView();
+  /** Vue 3D (module chargé à la demande) ; abandonnée pour la session si WebGL manque. */
+  private k3d: Keyboard3D | undefined;
+  private k3dLoading = false;
+  private k3dFailed = false;
   private readonly support = detectHidSupport(window);
 
   constructor(private readonly root: HTMLElement) {}
@@ -307,6 +314,8 @@ export class App {
     const session = this.session;
     workspace.hidden = !session;
     workspace.replaceChildren();
+    this.k3d?.dispose();
+    this.k3d = undefined;
     this.view = undefined;
     if (!session) return;
 
@@ -349,7 +358,7 @@ export class App {
     keysSection.id = 'section-keys';
     const header = document.createElement('div');
     header.className = 'keys-header';
-    header.append(modeButtons, ledBar.element);
+    header.append(modeButtons, this.viewSwitch(), ledBar.element);
     keysSection.append(tabs, header, frame, details, picker.element, colorBox);
     const dynamicSection = document.createElement('div');
     dynamicSection.id = 'section-dynamic';
@@ -478,6 +487,85 @@ export class App {
     );
   }
 
+  private viewSwitch(): HTMLElement {
+    return this.segmented<KeyboardViewPref>(
+      t('kbview.label'),
+      'keyboard-view',
+      [
+        ['3d', t('kbview.3d')],
+        ['plan', t('kbview.plan')],
+      ],
+      this.keyboardView,
+      (value) => {
+        this.keyboardView = value;
+        saveKeyboardView(value);
+        this.refresh();
+      },
+    );
+  }
+
+  /** Charge la vue 3D (three.js dans un fichier séparé) puis redessine ; reste en plan si WebGL manque. */
+  private load3d(session: Session): void {
+    if (this.k3dLoading || this.k3dFailed) return;
+    this.k3dLoading = true;
+    import('./keyboard-3d/keyboard-3d')
+      .then(({ Keyboard3D }) => {
+        if (this.session !== session || this.keyboardView !== '3d' || this.k3d) return;
+        if (!Keyboard3D.supported()) {
+          this.k3dFailed = true;
+          this.editStatus('info', t('kbview.unsupported'));
+          return;
+        }
+        this.k3d = new Keyboard3D({
+          keys: session.keys,
+          model: session.profile?.model3d,
+          text: { canvas: t('kbview.canvas'), product: t('kbview.product'), top: t('kbview.top') },
+          onKeyClick: (row, col, event) => {
+            this.activateKey(row, col, event);
+          },
+          onPaintStart: (row, col, event) => {
+            if (!event.altKey) this.dragStart(row, col);
+          },
+          onPaintEnter: (row, col) => {
+            this.dragAdd(row, col);
+          },
+          onPaintEnd: () => {
+            this.dragEnd();
+          },
+        });
+      })
+      .catch((error: unknown) => {
+        this.k3dFailed = true;
+        this.editStatus(
+          'error',
+          t('kbview.error', { message: error instanceof Error ? error.message : String(error) }),
+        );
+      })
+      .finally(() => {
+        this.k3dLoading = false;
+        if (this.session === session) this.refresh();
+      });
+  }
+
+  /** Clic (ou Entrée) sur une touche, quelle que soit la vue : la choisir, ou la peindre en mode Couleurs. */
+  private activateKey(row: number, col: number, event: MouseEvent | KeyboardEvent): void {
+    if (this.mode === 'colors') {
+      this.paintKey(row, col, event);
+      return;
+    }
+    this.selected = { row, col };
+    this.refresh();
+    this.view?.frame.querySelector<SVGGElement>(`[data-key="${keyId(row, col)}"]`)?.focus();
+  }
+
+  /** Couleurs sur le dessin affiché (3D ou plan). */
+  private showPaints(paints: LedPaints): void {
+    const frame = this.view?.frame;
+    if (!frame) return;
+    if (this.k3d && frame.contains(this.k3d.element)) this.k3d.setPaints(paints);
+    else paintLeds(frame, paints);
+  }
+
   /** Choix de l'éclairage affiché sur le dessin, et état de l'aperçu. */
   private ledBar(): { element: HTMLElement; status: HTMLElement } {
     const element = document.createElement('div');
@@ -551,7 +639,7 @@ export class App {
     const showLayer = Boolean(lighting) && (this.mode === 'colors' || this.ledDisplay === 'layer');
     const showLive = this.ledDisplay !== 'off';
     if (!showLayer) {
-      paintLeds(view.frame, showLive ? this.livePaints : new Map());
+      this.showPaints(showLive ? this.livePaints : new Map());
       return;
     }
     const paints = new Map<string, LedPaint>();
@@ -568,7 +656,7 @@ export class App {
         paints.set(id, { kind: 'off' });
       }
     }
-    paintLeds(view.frame, paints);
+    this.showPaints(paints);
   }
 
   private markActiveTab(): void {
@@ -627,6 +715,36 @@ export class App {
   }
 
   /** Glisser sur plusieurs touches : aperçu local, une seule écriture (et une entrée d'historique) au relâché. */
+  private dragStart(row: number, col: number): void {
+    if (!this.session?.lighting) return;
+    this.drag = { layer: this.layer, after: new Map(), before: new Map() };
+    this.dragAdd(row, col);
+  }
+
+  private dragAdd(row: number, col: number): void {
+    const lighting = this.session?.lighting;
+    const drag = this.drag;
+    if (!lighting || !drag) return;
+    const led = lighting.led(row, col);
+    if (led === undefined || drag.after.has(led)) return;
+    drag.after.set(led, this.brush);
+    const previous = lighting.stage(drag.layer, new Map([[led, this.brush]])).get(led) ?? null;
+    drag.before.set(led, previous);
+    this.paintPreview();
+  }
+
+  private dragEnd(): void {
+    const drag = this.drag;
+    this.drag = undefined;
+    if (!drag) return;
+    // une seule touche : c'est le clic qui suit qui l'écrit (paintKey) ; on retire l'aperçu local
+    if (drag.after.size <= 1) {
+      this.session?.lighting?.stage(drag.layer, drag.before);
+      return;
+    }
+    void this.commitColors(drag.layer, drag.after, drag.before);
+  }
+
   private attachPaintDrag(svg: SVGSVGElement): void {
     const keyAt = (target: EventTarget | null): [number, number] | undefined => {
       const id = (target instanceof Element ? target.closest<SVGGElement>('[data-key]') : null)?.dataset.key;
@@ -634,40 +752,20 @@ export class App {
       const [row = 0, col = 0] = id.split(',').map(Number);
       return [row, col];
     };
-    const add = (target: EventTarget | null): void => {
-      const lighting = this.session?.lighting;
-      const drag = this.drag;
-      const key = keyAt(target);
-      if (!lighting || !drag || !key) return;
-      const led = lighting.led(key[0], key[1]);
-      if (led === undefined || drag.after.has(led)) return;
-      drag.after.set(led, this.brush);
-      const previous = lighting.stage(drag.layer, new Map([[led, this.brush]])).get(led) ?? null;
-      drag.before.set(led, previous);
-      this.paintPreview();
-    };
     svg.addEventListener('pointerdown', (event) => {
-      if (event.button !== 0 || event.altKey || !this.session?.lighting) return;
-      this.drag = { layer: this.layer, after: new Map(), before: new Map() };
-      add(event.target);
+      const key = keyAt(event.target);
+      if (event.button !== 0 || event.altKey || !key) return;
+      this.dragStart(key[0], key[1]);
     });
     svg.addEventListener('pointerover', (event) => {
-      if (this.drag && event.buttons & 1) add(event.target);
+      const key = keyAt(event.target);
+      if (this.drag && event.buttons & 1 && key) this.dragAdd(key[0], key[1]);
     });
-    const end = (): void => {
-      const drag = this.drag;
-      this.drag = undefined;
-      if (!drag) return;
-      // une seule touche : c'est le clic qui suit qui l'écrit (paintKey) ; on retire l'aperçu local
-      if (drag.after.size <= 1) {
-        this.session?.lighting?.stage(drag.layer, drag.before);
-        return;
-      }
-      void this.commitColors(drag.layer, drag.after, drag.before);
-    };
-    svg.addEventListener('pointerup', end);
+    svg.addEventListener('pointerup', () => {
+      this.dragEnd();
+    });
     svg.addEventListener('pointerleave', (event) => {
-      if (!(event.buttons & 1)) end();
+      if (!(event.buttons & 1)) this.dragEnd();
     });
   }
 
@@ -831,24 +929,35 @@ export class App {
       };
     });
     const selected = this.selected ? keyId(this.selected.row, this.selected.col) : undefined;
-    const keyboard = renderKeyboard({
-      keys: views,
-      ...(selected && this.mode === 'keys' ? { selected } : {}),
-      onSelect: (row, col, event) => {
-        if (this.mode === 'colors') {
-          this.paintKey(row, col, event);
-          return;
-        }
-        this.selected = { row, col };
-        this.refresh();
-        view.frame.querySelector<SVGGElement>(`[data-key="${keyId(row, col)}"]`)?.focus();
-      },
-    });
-    if (this.mode === 'colors') {
-      keyboard.classList.add('keyboard--paint');
-      this.attachPaintDrag(keyboard);
+    const use3d = this.keyboardView === '3d' && !this.k3dFailed;
+    if (!use3d && this.k3d) {
+      this.k3d.dispose();
+      this.k3d = undefined;
     }
-    view.frame.replaceChildren(keyboard);
+    if (use3d && this.k3d) {
+      if (this.k3d.element.parentElement !== view.frame) view.frame.replaceChildren(this.k3d.element);
+      this.k3d.setState({
+        views,
+        selected: this.mode === 'keys' ? selected : undefined,
+        layer: this.layer,
+        paintMode: this.mode === 'colors',
+      });
+    } else {
+      // plan SVG : vue choisie, ou en attendant le chargement de la 3D
+      const keyboard = renderKeyboard({
+        keys: views,
+        ...(selected && this.mode === 'keys' ? { selected } : {}),
+        onSelect: (row, col, event) => {
+          this.activateKey(row, col, event);
+        },
+      });
+      if (this.mode === 'colors') {
+        keyboard.classList.add('keyboard--paint');
+        this.attachPaintDrag(keyboard);
+      }
+      view.frame.replaceChildren(keyboard);
+      if (use3d) this.load3d(session);
+    }
     this.paintPreview();
     this.renderColorBox(session, view);
 

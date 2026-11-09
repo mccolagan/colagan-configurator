@@ -16,6 +16,10 @@ Cahier des charges et avancement : [`SPEC.md`](SPEC.md). Firmware : dépôt `col
 - **Éclairage sur le dessin** : _Couche affichée_ (couleurs de la couche sélectionnée, effet réel sous les touches
   « Effet »), _Clavier en direct_ (état réel des LED, ~20 i/s), ou _Masqué_. L'onglet de la couche active sur le
   clavier est marqué ●.
+- **Vue 3D** (par défaut, _Vue : 3D / Plan_) : keycaps aux légendes rétroéclairées par les LED réelles, coque
+  noir mat au contour du PCB (profil Colagan), vues _Produit_ / _Dessus_, mêmes clics et glisser que le plan.
+  three.js est chargé à la demande ; sans WebGL, le plan SVG reste affiché. Maquette de design :
+  [`maquette-3d.html`](https://mccolagan.github.io/colagan-configurator/maquette-3d.html).
 - **Macros & co** : macros (texte converti en frappes AZERTY), tap-dance, combos.
 - **Sauvegarde** : export / import `.vil` compatible Vial, instantanés locaux avant import.
 - **Mode démo** : clavier simulé, sans matériel.

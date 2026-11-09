@@ -11,6 +11,8 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: true,
+    // three.js (vue 3D) est isolé dans un fichier chargé à la demande : ~520 ko, 140 ko compressés
+    chunkSizeWarningLimit: 600,
   },
   test: {
     environment: 'jsdom',

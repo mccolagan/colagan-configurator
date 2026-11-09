@@ -9,6 +9,16 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:4173',
     trace: 'retain-on-failure',
+    // les tests existants pilotent le plan SVG ; la vue 3D a son propre fichier (keyboard-3d.spec.ts)
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: 'http://localhost:4173',
+          localStorage: [{ name: 'colagan.keyboardView', value: 'plan' }],
+        },
+      ],
+    },
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
