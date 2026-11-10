@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { KeycodeCatalog } from '../keycodes/catalog';
 import { KeyCapture } from './key-capture';
 
 function press(capture: KeyCapture, codes: string[], iso = true): number | undefined {
@@ -28,6 +29,26 @@ describe('capture d’une touche du clavier', () => {
   it('un modificateur appuyé puis relâché seul donne sa touche', () => {
     expect(press(new KeyCapture(), ['ShiftLeft'])).toBe(0xe1);
     expect(press(new KeyCapture(), ['AltRight'])).toBe(0xe6);
+    expect(press(new KeyCapture(), ['ControlLeft', 'AltRight'])).toBe(0xe6);
+  });
+
+  it('plusieurs modificateurs seuls : le dernier sert de touche, Ctrl + Maj -> LCTL(KC_LSFT)', () => {
+    expect(press(new KeyCapture(), ['ControlLeft', 'ShiftLeft'])).toBe(0x0100 | 0xe1);
+    expect(press(new KeyCapture(), ['ControlLeft', 'ShiftLeft', 'AltLeft'])).toBe(0x0300 | 0xe2);
+    expect(press(new KeyCapture(), ['ControlRight', 'ShiftRight'])).toBe(0x1100 | 0xe5);
+    expect(new KeycodeCatalog({ layers: 8, macroCount: 16, tapDanceCount: 32 }).serialize(0x01e1)).toBe(
+      'LCTL(KC_LSHIFT)',
+    );
+  });
+
+  it('rien tant qu’un modificateur reste tenu, et rien au relâchement après une touche', () => {
+    const capture = new KeyCapture();
+    expect(capture.down('ControlLeft', true)).toBeUndefined();
+    expect(capture.down('ShiftLeft', true)).toBeUndefined();
+    expect(capture.up('ShiftLeft')).toBeUndefined();
+    expect(capture.down('KeyA', true)).toBe(0x0100 | 0x04);
+    expect(capture.up('KeyA')).toBeUndefined();
+    expect(capture.up('ControlLeft')).toBeUndefined();
   });
 
   it('touche ISO près d’Entrée : KC_NUHS en AZERTY, KC_BSLS en QWERTY', () => {

@@ -25,10 +25,13 @@ test('capturer au clavier : la combinaison tapée est affectée à la touche cho
   // un modificateur seul, appuyé puis relâché
   await page.keyboard.press('Shift');
   await expect(details).toContainText('KC_LSHIFT');
+  // Ctrl + Maj seuls, appuyés puis relâchés : une touche qui tient Ctrl et Maj
+  await page.keyboard.press('Control+Shift');
+  await expect(details).toContainText('LCTL(KC_LSHIFT)');
 
   await page.keyboard.press('Escape');
   await expect(page.locator('#key-capture')).toHaveAttribute('aria-pressed', 'false');
   // hors capture, Ctrl+Z annule de nouveau
   await page.keyboard.press('Control+KeyZ');
-  await expect(details).toContainText('KC_Q');
+  await expect(details).toContainText('KC_LSHIFT');
 });

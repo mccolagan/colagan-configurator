@@ -9,7 +9,14 @@ const ALT = 0x04;
 const GUI = 0x08;
 const RIGHT = 0x10;
 
-const MODIFIERS: Record<string, { readonly bit: number; readonly right: boolean; readonly usage: number }> = {
+interface Modifier {
+  readonly bit: number;
+  readonly right: boolean;
+  /** Keycode de la touche elle-même (KC_LCTL…). */
+  readonly usage: number;
+}
+
+const MODIFIERS: Record<string, Modifier> = {
   ControlLeft: { bit: CTRL, right: false, usage: 0xe0 },
   ShiftLeft: { bit: SHIFT, right: false, usage: 0xe1 },
   AltLeft: { bit: ALT, right: false, usage: 0xe2 },
@@ -22,50 +29,65 @@ const MODIFIERS: Record<string, { readonly bit: number; readonly right: boolean;
 
 export class KeyCapture {
   private readonly held = new Set<string>();
-  /** Modificateur appuyé seul : affecté à son relâchement si aucune autre touche n'est venue entre-temps. */
-  private lone: string | undefined;
+  /**
+   * Modificateurs appuyés sans autre touche depuis le début de l'accord : affectés quand tout est relâché.
+   * Ctrl seul -> KC_LCTL ; Ctrl + Maj -> LCTL(KC_LSFT), qui tient Ctrl et Maj tant que la touche est enfoncée.
+   */
+  private chord: string[] = [];
+  private chordHasKey = false;
 
   /**
    * Touche enfoncée : keycode à affecter, ou undefined (modificateur en attente, touche inconnue).
    * `iso` : la touche près d'Entrée (event.code « Backslash ») est KC_NUHS sur un clavier ISO (AZERTY).
    */
   down(code: string, iso: boolean): number | undefined {
+    if (!this.held.size) {
+      this.chord = [];
+      this.chordHasKey = false;
+    }
     if (MODIFIERS[code]) {
-      this.lone = this.held.size ? undefined : code;
       this.held.add(code);
+      if (!this.chord.includes(code)) this.chord.push(code);
       return undefined;
     }
-    this.lone = undefined;
+    this.chordHasKey = true;
     const usages = hidUsages(code);
     const usage = iso ? usages[usages.length - 1] : usages[0];
     if (usage === undefined) return undefined;
-    return (this.mods() << 8) | usage;
+    return (mask(this.modifiers([...this.held])) << 8) | usage;
   }
 
-  /** Touche relâchée : keycode du modificateur s'il a été appuyé seul. */
+  /** Touche relâchée : quand tout est relâché, les modificateurs appuyés seuls (un ou plusieurs). */
   up(code: string): number | undefined {
-    const modifier = MODIFIERS[code];
     this.held.delete(code);
-    if (!modifier || this.lone !== code) return undefined;
-    this.lone = undefined;
-    return modifier.usage;
+    if (this.held.size || this.chordHasKey || !this.chord.length) return undefined;
+    const chord = this.modifiers(this.chord);
+    this.chord = [];
+    // le dernier appuyé sert de touche, les autres de modificateurs : Ctrl puis Maj -> LCTL(KC_LSFT)
+    const last = chord.at(-1);
+    if (!last) return undefined;
+    return (mask(chord.slice(0, -1)) << 8) | last.usage;
   }
 
   reset(): void {
     this.held.clear();
-    this.lone = undefined;
+    this.chord = [];
+    this.chordHasKey = false;
   }
 
-  /** Masque QMK des modificateurs tenus ; AltGr (Ctrl gauche + Alt droit sous Windows) devient RALT seul. */
-  private mods(): number {
-    const altGr = this.held.has('AltRight');
-    const list = [...this.held].flatMap((code) => {
+  /** Modificateurs de la liste ; AltGr (Ctrl gauche + Alt droit sous Windows) devient RALT seul. */
+  private modifiers(codes: readonly string[]): Modifier[] {
+    const altGr = codes.includes('AltRight');
+    return codes.flatMap((code) => {
       const modifier = MODIFIERS[code];
       return modifier && !(altGr && code === 'ControlLeft') ? [modifier] : [];
     });
-    if (!list.length) return 0;
-    // QMK n'a qu'un bit « droite » pour tous les modificateurs : droite seulement s'ils sont tous à droite
-    const right = list.every((m) => m.right);
-    return list.reduce((mask, m) => mask | m.bit, 0) | (right ? RIGHT : 0);
   }
+}
+
+/** Masque QMK (octet haut) ; QMK n'a qu'un bit « droite » pour tous : droite seulement s'ils sont tous à droite. */
+function mask(list: readonly Modifier[]): number {
+  if (!list.length) return 0;
+  const right = list.every((m) => m.right);
+  return list.reduce((bits, m) => bits | m.bit, 0) | (right ? RIGHT : 0);
 }
