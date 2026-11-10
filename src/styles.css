@@ -164,6 +164,12 @@ button:disabled {
 }
 
 .ui {
+  /* largeur de l'inspecteur, axe de la zone libre (vues, barre des couches, défilant, toasts) et hauteur
+     occupée par la barre des couches (mesurée par layoutScene) */
+  --insp: 348px;
+  --axis: calc((100% - var(--insp) - 8px) / 2);
+  --dock-space: 68px;
+
   position: relative;
   height: 100%;
   pointer-events: none;
@@ -261,6 +267,11 @@ button:disabled {
   background: var(--warn);
 }
 
+.pill[data-state='partial'] .orb {
+  background: var(--warn);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 55%, transparent);
+}
+
 .pill[data-state='on'] .orb {
   background: conic-gradient(from var(--siri-a), var(--siri));
   animation: siri-spin 3s linear infinite;
@@ -337,111 +348,185 @@ button:disabled {
 
 .views {
   position: absolute;
-  left: 50%;
+  left: max(var(--axis), 420px);
   top: 4px;
   transform: translateX(-50%);
 }
 
-/* ---------- Rail des couches ---------- */
-.rail {
+/* ---------- Barre des couches (bas) ---------- */
+.dock {
   position: absolute;
-  top: 76px;
-  left: 0;
-  width: 232px;
-  max-height: calc(100% - 76px - 24px);
-  overflow: auto;
-  padding: 8px;
-  border-radius: 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  bottom: 16px;
+  left: var(--axis);
+  transform: translateX(-50%);
+  max-width: calc(100% - var(--insp) - 8px);
+  box-sizing: border-box;
+  padding: 4px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
   z-index: 4;
 }
 
-.rail-h {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-  padding: 8px 10px 6px;
+.dock::-webkit-scrollbar {
+  display: none;
 }
 
-.rail-list {
+.dock .thumb {
+  top: 4px;
+  bottom: 4px;
+}
+
+.seg button.layer {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.layer {
-  display: grid;
-  grid-template-columns: 8px 1fr auto;
-  column-gap: 11px;
   align-items: center;
-  padding: 9px 10px;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  text-align: left;
-  color: var(--fg);
+  gap: 7px;
+  height: 36px;
+  padding: 0 13px 0 12px;
+  flex: none;
 }
 
-.layer:hover {
-  background: var(--fill-2);
-}
-
-.layer[aria-selected='true'] {
-  background: var(--fill);
-}
-
-.layer .ldot {
+.layer .ldot,
+.lcard .ldot {
+  position: relative;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--tint);
+  flex: none;
 }
 
-.layer.tab--keyboard .ldot {
-  box-shadow:
-    0 0 0 2px var(--bg),
-    0 0 0 3.5px var(--tint);
-}
-
-.layer .lname {
-  font-size: 14px;
-  font-weight: 500;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.layer .lnum {
+.layer .lnum,
+.lcard .lnum {
   font: 400 11px/1 var(--font-mono);
   color: var(--faint);
 }
 
-.layer .ldesc {
-  grid-column: 2 / span 2;
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 1px;
+/* barre trop étroite : pastille et numéro, le nom seulement sur la couche choisie */
+.dock.compact button.layer {
+  padding: 0 10px;
+  gap: 6px;
+  flex: 1 0 auto;
+  justify-content: center;
 }
 
-.layer .lnow {
-  color: var(--accent);
-}
-
-.layer canvas {
-  grid-column: 1 / span 3;
-  width: 100%;
-  height: auto;
-  aspect-ratio: 96 / 30;
-  margin-top: 10px;
+.dock.compact .layer:not([aria-selected='true']) .lname,
+.dock.compact .layer[aria-selected='true'] .lnum {
   display: none;
 }
 
-.layer[aria-selected='true'] canvas {
-  display: block;
+.dock.compact .layer .lnum {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* couche active sur le clavier : anneau à la teinte de la couche ; trois ondes quand elle change (pas d'animation
+   permanente dans le verre flouté, coûteuse à recomposer) */
+.layer.tab--keyboard .ldot,
+.lcard.is-live .ldot {
+  outline: 1.5px solid var(--tint);
+  outline-offset: 2px;
+}
+
+.layer.tab--keyboard .ldot::after {
+  content: '';
+  position: absolute;
+  inset: -3.5px;
+  border-radius: 50%;
+  border: 1.5px solid var(--tint);
+  animation: live-ping 2.6s ease-out 3;
+}
+
+@keyframes live-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+
+  70%,
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+
+/* fiche de couche : au survol, au focus ou au toucher d'une couche de la barre */
+.lcard {
+  position: absolute;
+  left: 0;
+  bottom: calc(var(--dock-space) + 10px);
+  width: 248px;
+  box-sizing: border-box;
+  padding: 12px 14px 13px;
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  z-index: 6;
+  pointer-events: none !important;
+  transform: translateX(-50%);
+  transition:
+    opacity 0.18s,
+    translate 0.18s;
+}
+
+.lcard.out {
+  opacity: 0;
+  translate: 0 6px;
+}
+
+.lcard.glide {
+  transition:
+    opacity 0.18s,
+    translate 0.18s,
+    left 0.24s cubic-bezier(0.3, 0.8, 0.2, 1);
+}
+
+.lc-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.lc-h .lnum {
+  margin-left: auto;
+}
+
+.lc-d {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.lcard canvas {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 192 / 60;
+  margin: 8px 0 4px;
+}
+
+.lc-a {
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.lc-live {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 500;
+  margin-top: 4px;
+}
+
+.lc-live i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: conic-gradient(from var(--siri-a), var(--siri));
+  animation: siri-spin 3s linear infinite;
 }
 
 /* ---------- Inspecteur ---------- */
@@ -1018,8 +1103,8 @@ kbd.k {
 /* Saisie en direct */
 .ticker {
   position: absolute;
-  bottom: 24px;
-  left: 50%;
+  bottom: calc(var(--dock-space) + 10px);
+  left: var(--axis);
   transform: translateX(-50%);
   display: flex;
   align-items: center;
@@ -1121,11 +1206,174 @@ kbd.k {
   color: var(--muted);
 }
 
+/* ---------- Guide ---------- */
+.link {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 500;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.sheet.guide {
+  width: min(620px, 100%);
+}
+
+.guide-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gtopic {
+  border-radius: 14px;
+  background: var(--fill-2);
+}
+
+.gtopic summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 14px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  list-style: none;
+}
+
+.gtopic summary::-webkit-details-marker {
+  display: none;
+}
+
+.gtopic summary span {
+  white-space: nowrap;
+}
+
+.gtopic summary small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 400 11px/1 var(--font-mono);
+  color: var(--faint);
+}
+
+.gtopic summary svg {
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.25s;
+}
+
+.gtopic[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.gbody {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 0 14px 14px;
+  font-size: 13.5px;
+}
+
+.sheet .gbody p {
+  margin: 0;
+}
+
+.gbody ol {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+/* exemples : codes alignés en colonne (sous-grille), descriptions alignées à côté */
+.gex {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-self: stretch;
+  border-radius: 12px;
+  background: var(--cell);
+  box-shadow: var(--cell-shadow);
+}
+
+.gex-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  column-gap: 12px;
+  min-height: 40px;
+  padding: 6px 12px;
+}
+
+.gcode {
+  justify-self: start;
+}
+
+/* téléphone : code au-dessus de sa description, pour les longs MT(…) */
+@media (width <= 820px) {
+  .gex {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .gex-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+}
+
+.gex-row + .gex-row {
+  border-top: 0.5px solid var(--line);
+}
+
+.gex-row span {
+  min-width: 0;
+  color: var(--muted);
+}
+
+.gcode {
+  flex: none;
+  border: 0;
+  border-radius: 8px;
+  padding: 5px 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: 500 12px/1.2 var(--font-mono);
+  cursor: pointer;
+}
+
+.gcode:hover {
+  filter: brightness(1.1);
+}
+
+.sheet .gnote {
+  font-size: 12.5px;
+  color: var(--faint);
+}
+
+.gbody .btn {
+  flex: none;
+}
+
 /* Toasts, palette, feuilles */
 #toasts {
   position: absolute;
-  bottom: 76px;
-  left: 50%;
+  bottom: calc(var(--dock-space) + 62px);
+  left: var(--axis);
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
@@ -2013,8 +2261,8 @@ button.keycode.chip {
 
 /* ---------- Écrans moyens et mobiles ---------- */
 @media (width <= 1180px) {
-  .rail {
-    width: 200px;
+  .ui {
+    --insp: 320px;
   }
 
   .inspector {
@@ -2035,12 +2283,14 @@ button.keycode.chip {
     display: none;
   }
 
+  .ui {
+    --axis: 50%;
+  }
+
   .views {
-    position: fixed;
-    top: auto;
-    bottom: 12px;
-    left: max(16px, env(safe-area-inset-left, 0px));
-    right: max(16px, env(safe-area-inset-right, 0px));
+    top: 52px;
+    left: 0;
+    right: 0;
     transform: none;
     display: flex;
     overflow-x: auto;
@@ -2048,9 +2298,18 @@ button.keycode.chip {
     z-index: 6;
   }
 
+  .pill {
+    white-space: nowrap;
+  }
+
+  .pill .pname {
+    display: none;
+  }
+
   .views button {
     flex: 1 0 auto;
-    padding: 0 10px;
+    padding: 0 6px;
+    font-size: 12.5px;
   }
 
   .pop {
@@ -2061,43 +2320,25 @@ button.keycode.chip {
     width: auto;
   }
 
-  .rail {
-    top: 62px;
-    right: 0;
-    width: auto;
-    max-height: none;
-    flex-direction: row;
-    overflow-x: auto;
-    padding: 5px;
-    border-radius: 16px;
+  .dock {
+    position: fixed;
+    bottom: max(12px, env(safe-area-inset-bottom, 0px));
+    left: max(16px, env(safe-area-inset-left, 0px));
+    right: max(16px, env(safe-area-inset-right, 0px));
+    transform: none;
+    max-width: none;
   }
 
-  .rail-list {
-    flex-direction: row;
-  }
-
-  .rail-h,
-  .layer .ldesc,
-  .layer canvas,
-  .layer .lnum {
-    display: none !important;
-  }
-
-  .layer {
-    grid-template-columns: 8px auto;
-    padding: 7px 12px;
-    flex: none;
-  }
-
-  .layer .lname {
-    font-size: 13px;
+  .lcard {
+    bottom: calc(var(--dock-space) + 8px);
+    z-index: 21;
   }
 
   .inspector {
     top: auto;
     left: 0;
     width: auto;
-    bottom: 62px;
+    bottom: calc(var(--dock-space) + 6px);
     max-height: 46%;
     border-radius: 20px;
   }

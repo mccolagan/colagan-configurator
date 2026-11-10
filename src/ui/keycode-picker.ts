@@ -87,6 +87,15 @@ export class KeycodePicker {
     this.render();
   }
 
+  /** Place un keycode dans « Keycode avancé » (exemples du guide) ; Appliquer l'affecte à la touche choisie. */
+  setExpression(text: string): void {
+    const form = this.query$('.picker__advanced') as HTMLFormElement;
+    const input = form.elements.namedItem('expression') as HTMLInputElement;
+    input.value = text;
+    input.focus();
+    input.scrollIntoView({ block: 'nearest' });
+  }
+
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     this.element.classList.toggle('picker--disabled', !enabled);

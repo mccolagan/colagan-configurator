@@ -71,6 +71,13 @@ export interface Keyboard3DOptions {
   readonly text: {
     readonly canvas: string;
     readonly parts: Readonly<Record<PartName, readonly [title: string, sub: string]>>;
+    /** Étiquette au-dessus de la moitié maître : « Droite · maître, branchée au PC ». */
+    readonly halves: {
+      readonly left: string;
+      readonly right: string;
+      readonly master: string;
+      readonly masterLong: string;
+    };
   };
   /** Mode keys : clic court sur une touche (jamais en mode paint : la peinture passe par onPaint*). */
   readonly onKeyClick: (row: number, col: number, event: MouseEvent) => void;
@@ -88,6 +95,12 @@ export interface Keyboard3DOptions {
   readonly onLayerPick?: (layer: number, key?: { row: number; col: number }) => void;
   /** Première image rendue. */
   readonly onReady?: () => void;
+}
+
+/** Moitié branchée au PC (maître) et lien série avec l'autre moitié. */
+export interface SplitLink {
+  readonly master: 'left' | 'right';
+  readonly remote: boolean;
 }
 
 export interface Keyboard3DState {
@@ -211,6 +224,10 @@ interface Key3D {
   pending: { sig: string; view: KeyView } | undefined;
   flipAt: number | undefined;
   flipSwapped: boolean;
+  /** Biais de mipmap de la légende (flou du changement de couche). */
+  readonly blur: { value: number };
+  /** 0 → 1 : moitié non reliée qui s'efface (touches translucides, LED éteintes) avant d'être masquée. */
+  ghost: number;
   /** Couleur demandée (sRGB 0-1) et couleur affichée (linéaire, amortie). */
   rgb: Rgb;
   readonly led: THREE.Color;
@@ -228,6 +245,13 @@ interface PartLabel {
   readonly dot: SVGCircleElement;
 }
 
+interface HalfTag {
+  readonly half: Half;
+  readonly el: HTMLDivElement;
+  readonly anchor: THREE.Object3D;
+  sig: string;
+}
+
 interface StackLabel {
   readonly layer: number;
   readonly el: HTMLButtonElement;
@@ -239,6 +263,15 @@ interface Pick {
   readonly key: Key3D;
   readonly layer?: number;
 }
+
+// Flou de légende calculé sur le GPU : la texture est lue dans un niveau de mipmap plus grossier (biais uBlur),
+// sans redessiner le canvas ni renvoyer la texture.
+const BLUR_MAP_FRAGMENT = THREE.ShaderChunk.map_fragment.replace(
+  'texture2D( map, vMapUv )',
+  'texture2D( map, vMapUv, uBlur )',
+);
+/** Durée du fondu flou d'une légende (s). */
+const LEGEND_SWAP_S = 0.34;
 
 const now = (): number => performance.now() / 1000;
 const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(a, v));
@@ -362,6 +395,7 @@ export class Keyboard3D {
     active: boolean;
   }[] = [];
   private readonly parts: PartLabel[] = [];
+  private readonly halfTags: HalfTag[] = [];
   private stackLabels: StackLabel[] = [];
   private readonly raycaster = new THREE.Raycaster();
   private readonly resizeObserver: ResizeObserver;
@@ -382,7 +416,6 @@ export class Keyboard3D {
   private painting: string | undefined;
   private tryKey: string | undefined;
   private down: { x: number; y: number; hit: Pick | undefined; button: number } | undefined;
-  private lastKey: { key: Key3D; at: number } | undefined;
   private split: SplitGeometry = { gap: 3.5, tent: 0, splay: 0 };
   private readonly geo = { gap: 3.5, tent: 0, splay: 0 };
   private caseOn = true;
@@ -390,6 +423,11 @@ export class Keyboard3D {
   private explodeF = 0;
   private xrayF = 0;
   private stackF = 0;
+  /** 1 : les deux moitiés affichées ; 0 : la moitié non reliée est sortie du cadre et masquée. */
+  private linkF = 1;
+  private link: SplitLink | undefined;
+  /** Moitié non reliée, gardée le temps qu'elle revienne dans le cadre. */
+  private goneHalf: number | undefined;
   private xrayOn = false;
   private labelsShown = false;
   private stackCount = 0;
@@ -518,6 +556,7 @@ export class Keyboard3D {
       this.pulses.push({ mesh, t0: 0, duration: 1, active: false });
     }
     this.buildPartLabels();
+    this.buildHalfTags();
 
     this.controls = new OrbitControls(this.camera, this.canvas);
     this.controls.enableDamping = true;
@@ -576,11 +615,9 @@ export class Keyboard3D {
 
   // ------------------------------------------------------------------ API
 
-  /** Légendes, touche choisie, couche et mode ; un changement de couche fait basculer les légendes en vague. */
+  /** Légendes, touche choisie, couche et mode ; un changement de couche floute puis remplace les légendes. */
   setState({ views, selected, layer, mode }: Keyboard3DState): void {
     const t = now();
-    const layerChanged = this.layer !== undefined && layer !== this.layer;
-    const origin = this.waveOrigin(layer, t);
     this.layer = layer;
     for (const view of views) {
       const key = this.keys.get(keyId(view.geometry.row, view.geometry.col));
@@ -597,8 +634,7 @@ export class Keyboard3D {
       if (!key.pending && sig === key.sig) continue;
       key.pending = { sig, view };
       key.flipSwapped = false;
-      key.flipAt =
-        t + (layerChanged ? Math.hypot(key.place.cx - origin[0], key.place.cy - origin[1]) * 0.028 : 0);
+      key.flipAt = t;
     }
     if (mode !== this.mode) {
       if (this.tryKey) this.releaseTry();
@@ -733,6 +769,15 @@ export class Keyboard3D {
   }
 
   /** Vague lumineuse le long de la chaîne LED (connexion). */
+  /** Moitié branchée au PC et lien avec l'autre (undefined : inconnu, rien d'affiché). */
+  setLink(link: SplitLink | undefined): void {
+    if (link?.master === this.link?.master && link?.remote === this.link?.remote) return;
+    const before = this.absentHalf();
+    this.link = link ? { ...link } : undefined;
+    if (this.absentHalf() !== before && this.started && !this.userMoved) this.flyTo(this.view, 0.9);
+    this.wake(1.2);
+  }
+
   flash(): void {
     for (const key of this.keys.values()) key.flash = Math.max(key.flash, 0.7 - key.chain * 0.01);
     this.wake(1);
@@ -1223,6 +1268,11 @@ export class Keyboard3D {
       depthWrite: false,
       toneMapped: false,
     });
+    const blur = { value: 0 };
+    legendMat.onBeforeCompile = (shader) => {
+      shader.uniforms.uBlur = blur;
+      shader.fragmentShader = `uniform float uBlur;\n${shader.fragmentShader.replace('#include <map_fragment>', BLUR_MAP_FRAGMENT)}`;
+    };
     const legend = new THREE.Mesh(
       this.cached(`legend:${String(w)}:${String(h)}`, () => {
         const geometry = new THREE.PlaneGeometry((w - 0.07) * 0.915 - 0.07, (h - 0.07) * 0.915 - 0.07);
@@ -1255,6 +1305,8 @@ export class Keyboard3D {
       pending: undefined,
       flipAt: undefined,
       flipSwapped: false,
+      blur,
+      ghost: 0,
       rgb: [0, 0, 0],
       led: new THREE.Color(0, 0, 0),
       press: 0,
@@ -1415,6 +1467,68 @@ export class Keyboard3D {
     }
   }
 
+  private buildHalfTags(): void {
+    if (this.halves.length < 2) return;
+    for (const half of this.halves) {
+      if (!half.keys.length) continue;
+      const xs = half.keys.map((k) => k.place.cx);
+      const ys = half.keys.map((k) => k.place.cy);
+      const el = document.createElement('div');
+      el.className = 'k3d-htag';
+      el.style.opacity = '0';
+      this.overlay.append(el);
+      const anchor = new THREE.Object3D();
+      anchor.position.set(
+        (Math.min(...xs) + Math.max(...xs)) / 2,
+        PCB_TOP + CASE_TOP + 0.3,
+        Math.min(...ys) - 0.9,
+      );
+      half.content.add(anchor);
+      this.halfTags.push({ half, el, anchor, sig: '' });
+    }
+  }
+
+  /** Moitié non reliée au maître (undefined : les deux répondent, ou lien inconnu). */
+  private absentHalf(): number | undefined {
+    const link = this.link;
+    if (!link || link.remote || this.halves.length < 2) return undefined;
+    return this.halves.find((h) => h.sign < 0 !== (link.master === 'left'))?.index;
+  }
+
+  private updateHalfTags(): void {
+    const link = this.link;
+    const text = this.options.text.halves;
+    const show = this.explodeF < 0.3 && this.stackF < 0.3;
+    const width = this.overlay.clientWidth;
+    for (const tag of this.halfTags) {
+      const left = tag.half.sign < 0;
+      const master = link?.master === (left ? 'left' : 'right');
+      const on = show && master;
+      const opacity = on ? '1' : '0';
+      if (tag.el.style.opacity !== opacity) tag.el.style.opacity = opacity;
+      if (!on) continue;
+      const sig = left ? 'l' : 'r';
+      if (tag.sig !== sig) {
+        const name = document.createElement('b');
+        name.textContent = left ? text.left : text.right;
+        // « · maître » et sa suite dans un même élément : pas d'espace de flex avant la virgule
+        const state = document.createElement('span');
+        state.textContent = `· ${text.master}`;
+        const long = document.createElement('span');
+        long.className = 'long';
+        long.textContent = text.masterLong;
+        state.append(long);
+        tag.el.replaceChildren(document.createElement('i'), name, state);
+        tag.sig = sig;
+      }
+      tag.el.classList.toggle('warn', left);
+      const p = this.toScreen(tag.anchor);
+      const w = tag.el.offsetWidth;
+      const x = clamp(p.x, w / 2 + 12, Math.max(w / 2 + 12, width - w / 2 - 12));
+      tag.el.style.transform = `translate(${px(x)}, ${px(p.y)}) translate(-50%, -100%)`;
+    }
+  }
+
   private paintLegend(key: Key3D, view: KeyView, sig: string): void {
     drawLegend(key.canvas, view.label, view.kind);
     key.texture.needsUpdate = true;
@@ -1470,9 +1584,9 @@ export class Keyboard3D {
   private pressVisual(key: Key3D): void {
     key.pressTarget = 1;
     key.flash = 1;
-    this.lastKey = { key, at: now() };
     this.touch();
-    if (key.half.index === 0 && this.halves.length > 1) this.sendPulse(0.45);
+    if (key.half.index === 0 && this.halves.length > 1 && this.absentHalf() === undefined)
+      this.sendPulse(0.45);
     this.wake(0.6);
   }
 
@@ -1500,7 +1614,6 @@ export class Keyboard3D {
           this.controls.enabled = false;
           canvas.setPointerCapture(event.pointerId);
           this.painting = key.id;
-          this.lastKey = { key, at: now() };
           this.tap(key, 0.09);
           this.options.onPaintStart?.(key.row, key.col, event);
         } else if (this.mode === 'try') {
@@ -1555,7 +1668,6 @@ export class Keyboard3D {
           this.options.onBackgroundClick?.();
           return;
         }
-        this.lastKey = { key: hit.key, at: now() };
         if (hit.layer !== undefined)
           this.options.onLayerPick?.(hit.layer, { row: hit.key.row, col: hit.key.col });
         else this.options.onKeyClick(hit.key.row, hit.key.col, event);
@@ -1586,19 +1698,9 @@ export class Keyboard3D {
       this.dropHover = undefined;
       this.attachRing(this.dropRing, undefined);
       if (hit && hit.layer === undefined && event.dataTransfer) {
-        this.lastKey = { key: hit.key, at: now() };
         onDrop(hit.key.row, hit.key.col, event.dataTransfer);
       }
     });
-  }
-
-  /** Origine de la vague de bascule des légendes : dernière touche touchée, sinon un coin du clavier. */
-  private waveOrigin(layer: number, t: number): Point {
-    const last = this.lastKey;
-    if (last && t - last.at < 2) return [last.key.place.cx, last.key.place.cy];
-    const b = this.bounds;
-    const forward = this.layer === undefined || layer > this.layer;
-    return [forward ? b.maxX - 3 : b.minX + 3, b.minY];
   }
 
   /** Activité : repousse l'auto-rotation de la vue Produit. */
@@ -1637,14 +1739,23 @@ export class Keyboard3D {
 
   // ------------------------------------------------------------------ caméra
 
+  /** Moitié seule à l'écran : la seule reliée, ou celle de la vue éclatée (droite, sauf si elle manque). */
+  private soloHalf(view: SceneView): Half | undefined {
+    if (this.halves.length < 2) return undefined;
+    const absent = this.absentHalf();
+    if (absent !== undefined) return this.halves.find((h) => h.index !== absent);
+    return view === 'exploded' ? this.halves[this.halves.length - 1] : undefined;
+  }
+
   private viewTarget(view: SceneView): THREE.Vector3 {
     const spec = VIEWS[view];
     let x = 0;
-    if (view === 'exploded') {
-      const half = this.halves[this.halves.length - 1];
-      const center = half ? (half.bounds.minX + half.bounds.maxX) / 2 : 0;
-      const shift = this.halves.length > 1 ? this.split.gap / 2 : 0;
-      x = center - (this.bounds.minX + this.bounds.maxX) / 2 + shift + 2.2;
+    const half = this.soloHalf(view);
+    if (half) {
+      const center = (half.bounds.minX + half.bounds.maxX) / 2;
+      x = center - (this.bounds.minX + this.bounds.maxX) / 2 + (half.sign * this.split.gap) / 2;
+      // place à droite pour les étiquettes des pièces
+      if (view === 'exploded') x += 2.2;
     }
     return new THREE.Vector3(x, spec.ty, spec.tz);
   }
@@ -1655,8 +1766,12 @@ export class Keyboard3D {
     const fw = Math.max(200, W - this.insets.left - this.insets.right);
     const fh = Math.max(200, H - this.insets.top - this.insets.bottom);
     const tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
-    const split = this.halves.length > 1 ? this.split.gap + this.split.splay * 0.06 : 0;
-    const width = this.bounds.maxX - this.bounds.minX + split + 1.4;
+    const alone = this.absentHalf() !== undefined ? this.soloHalf(view) : undefined;
+    const split = this.halves.length > 1 && !alone ? this.split.gap + this.split.splay * 0.06 : 0;
+    const width =
+      (alone ? alone.bounds.maxX - alone.bounds.minX : this.bounds.maxX - this.bounds.minX) +
+      split +
+      (alone ? 3.4 : 1.4);
     const depth = this.bounds.maxY - this.bounds.minY + 1.3 + (view === 'stack' ? 2.1 : 0);
     const radius = Math.max(width / 2 / ((tan * fw) / H), depth / 2 / ((tan * fh) / H));
     return radius * VIEWS[view].k * (view === 'top' ? 1.02 : 1.08);
@@ -1799,7 +1914,10 @@ export class Keyboard3D {
 
   /** Étiquettes HTML : pièces de la vue éclatée (colonne à droite, traits de rappel), couches de la pile. */
   private updateLabels(): void {
-    const showParts = this.explodeF > 0.55 && this.parts.length > 0;
+    const showParts =
+      this.explodeF > 0.55 &&
+      this.parts.length > 0 &&
+      this.halves[this.halves.length - 1]?.root.visible !== false;
     this.leaders.style.opacity = showParts ? '1' : '0';
     if (showParts) {
       const items = this.parts.map((part) => ({ part, s: this.toScreen(part.anchor) }));
@@ -1826,7 +1944,8 @@ export class Keyboard3D {
       for (const part of this.parts) if (part.el.style.opacity !== '0') part.el.style.opacity = '0';
     }
     const showStack = this.stackF > 0.4;
-    const first = this.halves[0];
+    // étiquettes à gauche de la pile de la première moitié affichée (la droite si la gauche n'est pas reliée)
+    const first = this.halves.find((h) => h.root.visible) ?? this.halves[0];
     if (!showStack || !first) {
       for (const label of this.stackLabels) {
         if (label.el.style.opacity === '0') continue;
@@ -1838,6 +1957,7 @@ export class Keyboard3D {
     }
     // une étiquette par dalle, à gauche de la pile ; écartées si les dalles sont trop proches à l'écran
     const placed = this.stackLabels.map((label) => {
+      if (label.anchor.parent !== first.groups.stack) first.groups.stack.add(label.anchor);
       label.anchor.position.set(
         first.bounds.minX - 0.3,
         STACK_Y0 + label.layer * STACK_DY * this.stackF,
@@ -1925,11 +2045,19 @@ export class Keyboard3D {
     const solo = e > 0.15 && this.halves.length > 1;
     const selected = this.selected ? this.keys.get(this.selected) : undefined;
     const caseShown = this.caseF > 0.02;
+    const absent = this.absentHalf();
+    this.linkF = damp(this.linkF, absent === undefined ? 1 : 0, 6, 1e-3);
+    if (absent !== undefined) this.goneHalf = absent;
+    else if (this.linkF >= 1) this.goneHalf = undefined;
+    const away = 1 - this.linkF;
+    // vue éclatée : une seule moitié (la droite, ou la gauche si la droite n'est pas reliée)
+    const exploded = solo ? (this.soloHalf('exploded') ?? this.halves[this.halves.length - 1]) : undefined;
     for (const half of this.halves) {
-      half.root.position.x = (half.sign * this.geo.gap) / 2;
+      const gone = half.index === this.goneHalf;
+      half.root.position.x = (half.sign * this.geo.gap) / 2 + (gone ? half.sign * away * 9 : 0);
       half.tent.rotation.z = -half.sign * rad(this.geo.tent);
       half.splay.rotation.y = -half.sign * rad(this.geo.splay);
-      half.root.visible = !(solo && half.index === 0);
+      half.root.visible = !(exploded && half !== exploded) && !(gone && away > 0.98);
       const g = half.groups;
       g.caps.position.y = e * 1.6;
       g.switches.position.y = e * 0.85;
@@ -1968,11 +2096,10 @@ export class Keyboard3D {
     if (this.xrayF > 0.01) busy = true; // chaîne LED animée
     const xr = this.xrayF > 0.01;
     if (xr !== this.xrayOn) {
-      for (const material of [...[...this.keys.values()].map((k) => k.capMat), this.caseMat]) {
-        material.transparent = xr;
-        material.depthWrite = !xr;
-        material.needsUpdate = true;
-      }
+      // keycaps : transparence gérée touche par touche (rayons X ou moitié non reliée)
+      this.caseMat.transparent = xr;
+      this.caseMat.depthWrite = !xr;
+      this.caseMat.needsUpdate = true;
       this.xrayOn = xr;
     }
     this.caseMat.opacity = 1 - this.xrayF * 0.88;
@@ -1980,7 +2107,8 @@ export class Keyboard3D {
       this.rebuildCable();
       this.cablesDirty = false;
     }
-    if (this.cable) this.cable.visible = !solo;
+    // câble entre moitiés : seulement quand les deux sont à leur place
+    if (this.cable) this.cable.visible = !solo && this.linkF > 0.98;
 
     if (selected && this.stackF > 0.05 && this.stackCount > 0) {
       const stack = selected.half.groups.stack;
@@ -1997,34 +2125,45 @@ export class Keyboard3D {
     this.selectRing.position.y = ringY;
     this.dropRing.position.y = ringY;
 
-    // touches : bascule des légendes, survol, appui, LED (légende teintée, jupe, puce, halo)
+    // touches : fondu flou des légendes, survol, appui, moitié non reliée, LED (légende teintée, jupe, puce, halo)
     const spill = this.halves.map(() => new THREE.Color(0, 0, 0));
     const srgb = this.tmp2;
+    const reduced = reducedMotion();
     for (const key of this.keys.values()) {
-      let hop = 0;
+      // la légende se floute et s'estompe, la nouvelle est dessinée au plus flou (une fois, réparti sur quatre
+      // images pour éviter un à-coup), puis redevient nette
+      let fade = 1;
       if (key.pending) {
         busy = true;
         if (key.flipAt !== undefined && t >= key.flipAt) {
-          const p = (t - key.flipAt) / 0.42;
-          if (!key.flipSwapped && p >= 0.5) {
+          const p = reduced ? 1 : (t - key.flipAt) / LEGEND_SWAP_S;
+          const w = Math.sin(Math.min(1, p) * Math.PI);
+          if (!key.flipSwapped && p >= 0.4 + (key.index % 4) * 0.05) {
             this.paintLegend(key, key.pending.view, key.pending.sig);
             key.flipSwapped = true;
           }
           if (p >= 1) {
-            key.legend.rotation.x = 0;
             key.pending = undefined;
             key.flipAt = undefined;
+            key.blur.value = 0;
           } else {
-            key.legend.rotation.x = (Math.sin(p * Math.PI) * Math.PI) / 2;
-            hop = Math.sin(p * Math.PI) * 0.06;
+            fade = 1 - 0.6 * w;
+            key.blur.value = 3.2 * w;
           }
         }
+      }
+      key.ghost = damp(key.ghost, key.half.index === absent ? 1 : 0, 8, 1e-3);
+      const seeThrough = xr || key.ghost > 0.01;
+      if (key.capMat.transparent !== seeThrough) {
+        key.capMat.transparent = seeThrough;
+        key.capMat.depthWrite = !seeThrough;
+        key.capMat.needsUpdate = true;
       }
       const liftTarget =
         (key.id === this.hover && !this.painting ? 0.04 : 0) + (key.id === this.selected ? 0.07 : 0);
       key.lift = damp(key.lift, liftTarget, 14);
       key.press = damp(key.press, key.pressTarget, key.pressTarget > key.press ? 40 : 18);
-      key.inner.position.y = key.lift + hop - key.press * TRAVEL;
+      key.inner.position.y = key.lift - key.press * TRAVEL;
       if (key.flash > 0) {
         key.flash = Math.max(0, key.flash - dt * 2.6);
         busy = true;
@@ -2033,10 +2172,11 @@ export class Keyboard3D {
         this.bootAt === undefined ? 1 : clamp((t - this.bootAt - 0.5 - key.chain * 0.025) / 0.3, 0, 1);
       if (boot < 1) busy = true;
       const fl = key.flash * 0.45;
+      const lit = boot * (1 - key.ghost);
       this.tmp.setRGB(
-        clamp(key.rgb[0] * boot + fl, 0, 1),
-        clamp(key.rgb[1] * boot + fl, 0, 1),
-        clamp(key.rgb[2] * boot + fl, 0, 1),
+        clamp(key.rgb[0] * lit + fl, 0, 1),
+        clamp(key.rgb[1] * lit + fl, 0, 1),
+        clamp(key.rgb[2] * lit + fl, 0, 1),
         THREE.SRGBColorSpace,
       );
       const gap =
@@ -2052,9 +2192,9 @@ export class Keyboard3D {
       srgb.copy(key.led).convertLinearToSRGB();
       const [r, g, b] = legendColor([srgb.r, srgb.g, srgb.b]);
       key.legendMat.color.setRGB(r, g, b, THREE.SRGBColorSpace);
-      key.legendMat.opacity = 1 - this.xrayF * 0.85;
-      key.capMat.opacity = 1 - this.xrayF * 0.86;
-      key.skirtMat.opacity = 0.94 * (1 - this.xrayF * 0.7);
+      key.legendMat.opacity = (1 - this.xrayF * 0.85) * fade * (1 - 0.72 * key.ghost);
+      key.capMat.opacity = (1 - this.xrayF * 0.86) * (1 - 0.62 * key.ghost);
+      key.skirtMat.opacity = 0.94 * (1 - this.xrayF * 0.7) * (1 - 0.7 * key.ghost);
       key.half.chip.setColorAt(key.index, key.led);
       key.half.glow.setColorAt(key.index, this.tmp.copy(key.led).multiplyScalar(this.theme.glow));
       spill[key.half.index]?.add(key.led);
@@ -2084,6 +2224,7 @@ export class Keyboard3D {
       pulse.mesh.material.opacity = Math.sin(q * Math.PI);
     }
 
+    if (this.halfTags.length) this.updateHalfTags();
     const labels = this.explodeF > 0.001 || this.stackF > 0.001;
     if (labels || this.labelsShown) this.updateLabels();
     this.labelsShown = labels;

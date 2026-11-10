@@ -1,4 +1,5 @@
 import { createDemoKeyboard } from '../demo/demo-keyboard';
+import { FakeKeyboard } from '../protocol/fake-keyboard';
 import { detectHidSupport, type HidSupport } from '../env/support';
 import { readLabelLayout, saveLabelLayout } from '../env/label-layout';
 import { readKeyboardView, saveKeyboardView, type KeyboardViewPref } from '../env/keyboard-view-pref';
@@ -25,13 +26,20 @@ import { layerDescription, layerTint, tripleTap } from '../profiles/layer-style'
 import { KeyboardClient } from '../protocol/client';
 import { LayerLighting } from '../rgb/layer-lighting';
 import { LedPreview, type LedPaint, type LedPaints, type PreviewState } from '../rgb/led-preview';
-import type { LayerColor } from '../protocol/led-stream';
+import type { LayerColor, LedStreamInfo } from '../protocol/led-stream';
 import { RgbController } from '../rgb/rgb-controller';
 import type { Transport } from '../protocol/packet';
 import { HidTransport } from '../transport/hid-transport';
 import { confirmDialog } from './confirm';
 import { keyId, paintLeds, renderKeyboard, type KeyView } from './keyboard-view';
-import type { Keyboard3D, SceneHit, SceneMode, SceneView, StackLayer } from './keyboard-3d/keyboard-3d';
+import type {
+  Keyboard3D,
+  SceneHit,
+  SceneMode,
+  SceneView,
+  SplitLink,
+  StackLayer,
+} from './keyboard-3d/keyboard-3d';
 import { KEYCODE_MIME, KeycodePicker, RISKY_KEYCODES } from './keycode-picker';
 import { renderBackupPanel } from './backup-panel';
 import { DynamicPanel } from './dynamic-panel';
@@ -40,6 +48,7 @@ import { unlockKeyboard } from './unlock-dialog';
 import { DisplayPop, DEFAULT_SPLIT, type Split } from './studio/display-pop';
 import { brandMark, errorMessage, h, icon } from './studio/dom';
 import { EffectPreviews, previewKeys } from './studio/effect-preview';
+import { Guide, guideTopics } from './studio/guide';
 import { LayerRail, type MiniKey } from './studio/layer-rail';
 import { CommandPalette, type Command } from './studio/palette';
 import { Seg } from './studio/seg';
@@ -69,6 +78,8 @@ const VIEWS: readonly (readonly [ViewChoice, MessageKey])[] = [
 ];
 
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
+/** Relecture de l'état du split quand l'aperçu LED est arrêté (ms). */
+const LINK_POLL_MS = 2000;
 
 interface Session {
   readonly client: KeyboardClient;
@@ -122,6 +133,11 @@ export class App {
     { layer: number; after: Map<number, LayerColor>; before: Map<number, LayerColor> } | undefined;
   private livePaints: LedPaints = new Map();
   private keyboardLayer: number | undefined;
+  /** Moitié branchée au PC et lien avec l'autre, lus dans la réponse info de la commande 0xC0. */
+  private link: SplitLink | undefined;
+  private linkTimer: number | undefined;
+  private deviceHalves: HTMLElement | undefined;
+  private ui!: HTMLElement;
   private colorPanelKey = '';
   private dynamicPanel: DynamicPanel | undefined;
   private ledDisplay: LedDisplay = readLedDisplay();
@@ -148,6 +164,7 @@ export class App {
   private planFrame!: HTMLElement;
   private views!: Seg<ViewChoice>;
   private rail!: LayerRail;
+  private guide!: Guide;
   private inspector!: HTMLElement;
   private tabs!: Seg<InspectorTab>;
   private panels!: Record<InspectorTab, HTMLElement>;
@@ -189,6 +206,7 @@ export class App {
       navigator.hid.addEventListener('disconnect', (event) => {
         if (this.session?.device === event.device) {
           this.session.preview.stop();
+          this.stopLinkPoll();
           this.session = undefined;
           this.renderWorkspace();
           this.status('warn', t('connect.disconnected'));
@@ -248,6 +266,25 @@ export class App {
     const commandButton = this.roundButton('command-button', 'search', t('palette.button'), () => {
       this.palette.show();
     });
+    const helpButton = this.roundButton('help-button', 'help', t('guide.open'), () => {
+      this.guide.show();
+    });
+    this.guide = new Guide({
+      onUseCode: (code) => {
+        this.setTab('keys');
+        this.ws?.picker.setExpression(code);
+      },
+      onOpenTab: (tab) => {
+        this.setTab(tab);
+      },
+      layersExtra: () => {
+        const session = this.session;
+        const triple = session && tripleTap(session.profile);
+        return session && triple
+          ? t('guide.layers.triple', { key: triple.label, layer: layerName(session.profile, triple.layer) })
+          : undefined;
+      },
+    });
     this.display = new DisplayPop({
       ledDisplay: this.ledDisplay,
       onLedDisplay: (value) => {
@@ -302,6 +339,7 @@ export class App {
         this.redoButton,
         this.pill,
         this.displayButton,
+        helpButton,
         commandButton,
         this.display.element,
       ),
@@ -404,25 +442,32 @@ export class App {
       'aria-live': 'polite',
     });
 
+    this.ui = h(
+      'div',
+      { class: 'ui' },
+      top,
+      this.welcome,
+      this.rail.element,
+      this.rail.card,
+      this.inspector,
+      this.ticker,
+      this.toasts.element,
+    );
     this.root.replaceChildren(
       this.stage,
-      h(
-        'div',
-        { class: 'ui' },
-        top,
-        this.welcome,
-        this.rail.element,
-        this.inspector,
-        this.ticker,
-        this.toasts.element,
-      ),
+      this.ui,
       this.siri,
       this.tip,
       this.device,
+      this.guide.element,
       this.palette.element,
       this.editStatusEl,
     );
     document.title = t('app.title');
+    // largeurs des pastilles connues une fois les polices chargées
+    void document.fonts.ready.then(() => {
+      this.layoutScene();
+    });
   }
 
   private roundButton(
@@ -450,19 +495,24 @@ export class App {
     return this.keyboardView === 'plan' || this.k3dFailed ? 'plan' : this.sceneView;
   }
 
-  /** Zone libre entre les panneaux : la caméra 3D (ou le plan) s'y centre. */
+  /**
+   * Zone libre entre les panneaux : la caméra 3D (ou le plan) s'y centre. Les vues (en haut), la barre des
+   * couches (en bas), le défilant et les toasts sont alignés sur son axe (variables CSS --axis, --dock-space).
+   */
   private layoutScene(): void {
     const W = innerWidth;
     const H = innerHeight;
     let insets = { left: 16, right: 16, top: 76, bottom: 24 };
     if (this.session) {
-      const rail = this.rail.element.getBoundingClientRect();
+      this.rail.sync();
+      const dock = this.rail.element.getBoundingClientRect();
+      this.ui.style.setProperty('--dock-space', `${String(Math.round(H - dock.top))}px`);
       const inspector = this.inspector.getBoundingClientRect();
       const views = this.views.element.getBoundingClientRect();
       insets =
         W <= 820
-          ? { left: 0, right: 0, top: rail.bottom + 6, bottom: H - Math.min(inspector.top, views.top) + 6 }
-          : { left: rail.right + 8, right: W - inspector.left + 8, top: 76, bottom: 24 };
+          ? { left: 0, right: 0, top: views.bottom + 6, bottom: H - Math.min(inspector.top, dock.top) + 6 }
+          : { left: 28, right: W - inspector.left + 8, top: views.bottom + 12, bottom: H - dock.top + 10 };
     }
     this.k3d?.setInsets(insets);
     Object.assign(this.planFrame.style, {
@@ -555,6 +605,7 @@ export class App {
           this.keyboardLayer = ledInfo.activeLayer;
           this.refreshRail();
         }
+        this.applyLink(ledInfo);
       },
       onState: (state, detail) => {
         this.ledState = { state, ...(detail ? { detail } : {}) };
@@ -571,6 +622,8 @@ export class App {
     this.ledState = { state: 'idle' };
     this.livePaints = new Map();
     this.keyboardLayer = undefined;
+    this.link = undefined;
+    this.k3d?.setLink(undefined);
     this.colorPanelKey = '';
     this.session = {
       client,
@@ -609,7 +662,17 @@ export class App {
         keys: keys.length,
       }),
     );
+    // tests de bout en bout : débrancher puis rebrancher la moitié gauche du clavier simulé
+    if (navigator.webdriver && transport instanceof FakeKeyboard)
+      Object.assign(window, {
+        __demo: {
+          setRemote: (connected: boolean) => {
+            transport.remoteConnected = connected;
+          },
+        },
+      });
     this.renderWorkspace();
+    this.startLinkPoll();
     this.k3d?.flash();
     this.toasts.show(
       demo
@@ -637,6 +700,7 @@ export class App {
     this.welcome.hidden = Boolean(session);
     this.views.element.hidden = !session;
     this.rail.element.hidden = !session;
+    this.rail.card.hidden = !session;
     this.inspector.hidden = !session;
     this.display.showSceneControls(Boolean(session) && this.viewChoice() !== 'plan');
     this.updatePill();
@@ -662,10 +726,20 @@ export class App {
       onPick: (code) => void this.assign(code),
     });
     const keyHead = h('div', { class: 'panel-part', id: 'key-details' });
+    const holdLink = h('button', {
+      class: 'link',
+      type: 'button',
+      id: 'guide-hold-link',
+      text: t('guide.holdLink'),
+    });
+    holdLink.addEventListener('click', () => {
+      this.guide.show('hold');
+    });
     const pickerHead = h(
       'div',
       { class: 'h' },
       h('span', { text: t('picker.title') }),
+      holdLink,
       h('small', { id: 'picker-hint' }),
     );
     this.panels.keys.append(keyHead, pickerHead, picker.element);
@@ -689,15 +763,76 @@ export class App {
 
   private updatePill(): void {
     const session = this.session;
-    const state = !session ? 'off' : session.demo ? 'demo' : 'on';
+    const link = session ? this.link : undefined;
+    // une seule moitié, ou la gauche au PC (keymap lue dans sa mémoire) : point orange
+    const partial = Boolean(link && (!link.remote || link.master === 'left'));
+    const state = !session ? 'off' : partial ? 'partial' : session.demo ? 'demo' : 'on';
     this.pill.dataset.state = state;
     const name = session?.client.info.definition.name ?? session?.device?.productName ?? '';
-    this.pill.replaceChildren(h('span', { class: 'orb' }), !session ? t('pill.offline') : name);
-    if (session)
-      this.pill.append(
-        h('span', { class: 'sub', text: session.demo ? t('pill.demo') : t('pill.connected') }),
-      );
+    this.pill.replaceChildren(
+      h('span', { class: 'orb' }),
+      !session ? t('pill.offline') : h('span', { class: 'pname', text: name }),
+    );
+    if (session) {
+      const sub =
+        !link || !partial
+          ? session.demo
+            ? t('pill.demo')
+            : t('pill.connected')
+          : !link.remote
+            ? t(link.master === 'left' ? 'pill.leftAlone' : 'pill.rightAlone')
+            : t('pill.masterLeft');
+      this.pill.append(' ', h('span', { class: 'sub', text: sub }));
+    }
     this.pill.setAttribute('aria-label', session ? t('pill.open', { name }) : t('pill.offline'));
+    this.pill.title = link ? this.linkText(link) : '';
+  }
+
+  /** « Droite branchée au PC (maître) · gauche reliée ». */
+  private linkText(link: SplitLink): string {
+    const left = link.master === 'left';
+    return t('device.halvesValue', {
+      master: t(left ? 'split.left' : 'split.right'),
+      other: t(left ? 'split.rightLower' : 'split.leftLower'),
+      state: t(link.remote ? 'device.linked' : 'device.unlinked'),
+    });
+  }
+
+  /** Lien entre moitiés lu dans la réponse info 0xC0 : scène 3D, pastille, feuille du clavier, toasts. */
+  private applyLink(info: LedStreamInfo): void {
+    const link: SplitLink = { master: info.masterIsLeft ? 'left' : 'right', remote: info.remoteConnected };
+    const before = this.link;
+    if (before?.master === link.master && before.remote === link.remote) return;
+    this.link = link;
+    this.k3d?.setLink(link);
+    this.updatePill();
+    if (this.deviceHalves) this.deviceHalves.textContent = this.linkText(link);
+    const other = t(link.master === 'left' ? 'split.rightLower' : 'split.leftLower');
+    if (link.master === 'left' && before?.master !== 'left') this.toasts.show(t('split.leftMaster'), 'warn');
+    else if (!link.remote && (before?.remote ?? true))
+      this.toasts.show(t('split.lost', { side: other }), 'warn');
+    else if (link.remote && before?.remote === false)
+      this.toasts.show(t('split.back', { side: other }), 'ok');
+  }
+
+  /** L'aperçu LED relit l'état du clavier toutes les secondes ; sans lui (LED masquées), relecture lente. */
+  private startLinkPoll(): void {
+    this.stopLinkPoll();
+    const session = this.session;
+    if (!session) return;
+    this.linkTimer = window.setInterval(() => {
+      if (this.session !== session) {
+        this.stopLinkPoll();
+        return;
+      }
+      if (!session.preview.active) void session.preview.refreshInfo();
+    }, LINK_POLL_MS);
+    if (!session.preview.active) void session.preview.refreshInfo();
+  }
+
+  private stopLinkPoll(): void {
+    window.clearInterval(this.linkTimer);
+    this.linkTimer = undefined;
   }
 
   /** Feuille du clavier (clic sur la pastille) : informations, sauvegarde .vil et instantanés. */
@@ -726,6 +861,11 @@ export class App {
           : t('device.rgbNone'),
       ],
     ];
+    this.deviceHalves = h('span', {
+      class: 'v',
+      id: 'device-halves',
+      text: this.link ? this.linkText(this.link) : '…',
+    });
     const backup = renderBackupPanel({
       client: session.client,
       catalog: session.catalog,
@@ -777,6 +917,7 @@ export class App {
           ...items.map(([label, value]) =>
             h('div', { class: 'item' }, h('span', { text: label }), h('span', { class: 'v', text: value })),
           ),
+          h('div', { class: 'item' }, h('span', { text: t('device.halves') }), this.deviceHalves),
         ),
         h('div', { class: 'h', text: t('view.backup') }),
         backup,
@@ -866,6 +1007,12 @@ export class App {
               pico: part('pico'),
               usb: part('usb'),
             },
+            halves: {
+              left: t('split.left'),
+              right: t('split.right'),
+              master: t('split.master'),
+              masterLong: t('split.masterLong'),
+            },
           },
           onKeyClick: (row, col, event) => {
             this.activateKey(row, col, event);
@@ -915,6 +1062,7 @@ export class App {
         this.k3d.setSplit(this.split);
         this.k3d.setCase(this.caseOn);
         this.k3d.setView(this.sceneView);
+        this.k3d.setLink(this.link);
         // tests de bout en bout (navigateur piloté) : position écran d'une touche 3D
         if (navigator.webdriver) {
           Object.assign(window, {
@@ -1027,6 +1175,7 @@ export class App {
     this.rail.update(this.layer, this.keyboardLayer);
     const { client, keys, lighting } = session;
     for (let layer = 0; layer < client.info.layers; layer++) {
+      this.rail.setAccess(layer, this.accessText(session, layer));
       const mini: MiniKey[] = keys.map((geometry) => {
         const code = client.getKey(layer, geometry.row, geometry.col);
         const color = lighting?.color(layer, geometry.row, geometry.col);
@@ -1911,6 +2060,7 @@ export class App {
     }
     if (this.palette.open) return;
     if (event.key === 'Escape') {
+      if (this.guide.open) this.guide.close();
       if (!this.device.hidden) this.device.hidden = true;
       if (this.display.open) {
         this.display.toggle(false);
@@ -1937,7 +2087,8 @@ export class App {
       }
       return;
     }
-    if (this.device.hidden) this.mirrorKey(event);
+    // pas de miroir des frappes sous une feuille ouverte (Espace y déplie les rubriques du guide)
+    if (this.device.hidden && !this.guide.open) this.mirrorKey(event);
   }
 
   private onKeyUp(event: KeyboardEvent): void {
@@ -2078,6 +2229,14 @@ export class App {
         },
       },
     );
+    for (const topic of guideTopics())
+      list.push({
+        label: topic.title,
+        hint: t('guide.title'),
+        run: () => {
+          this.guide.show(topic.id);
+        },
+      });
     return list;
   }
 }

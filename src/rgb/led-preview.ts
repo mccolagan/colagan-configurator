@@ -66,6 +66,18 @@ export class LedPreview {
     return this.running;
   }
 
+  /** Relit l'état du clavier (couche active, moitiés reliées) quand l'aperçu ne tourne pas. */
+  async refreshInfo(): Promise<void> {
+    if (this.running || this.state === 'unsupported') return;
+    try {
+      const info = await getLedStreamInfo(this.transport);
+      this.info = info;
+      this.options.onInfo?.(info);
+    } catch {
+      // clavier occupé ou firmware sans la commande 0xC0 : nouvel essai au prochain passage
+    }
+  }
+
   start(): void {
     if (this.running || this.state === 'unsupported') return;
     this.running = true;

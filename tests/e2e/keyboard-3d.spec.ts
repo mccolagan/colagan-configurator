@@ -24,6 +24,10 @@ interface StudioHook {
   __studio?: { keyPoint(row: number, col: number): { x: number; y: number } | undefined };
 }
 
+interface DemoHook {
+  __demo?: { setRemote(connected: boolean): void };
+}
+
 /** Position écran d'une touche 3D, donnée par la scène elle-même (caméra, panneaux et écartement compris). */
 async function keyPoint(page: Page, row: number, col: number): Promise<{ x: number; y: number }> {
   await page.waitForFunction(() => Boolean((window as StudioHook).__studio));
@@ -80,6 +84,7 @@ test('« Plan » revient au dessin SVG, et le choix est mémorisé', async ({ pa
 });
 
 test('dans l’onglet Lumière, un clic sur une touche 3D la peint', async ({ page }) => {
+  test.slow();
   await page.getByRole('tab', { name: 'Lumière' }).click();
   await page.locator('#views').getByRole('button', { name: 'Dessus' }).click();
   await page.waitForTimeout(1600);
@@ -111,5 +116,28 @@ test('une frappe sur le clavier de l’ordinateur s’affiche dans le défilant'
   await page.locator('body').press('KeyQ');
   // AZERTY : la touche KC_Q porte « A »
   await expect(page.locator('.ticker kbd').last()).toHaveText('A');
+  expect(errors).toEqual([]);
+});
+
+test('la scène 3D signale la moitié maître ; une moitié débranchée disparaît puis revient', async ({
+  page,
+}) => {
+  test.slow();
+  // la scène se charge à la demande, puis l'état du split arrive avec l'aperçu LED
+  await expect(page.locator('.k3d-htag', { hasText: 'Droite' })).toContainText('maître, branchée au PC', {
+    timeout: 15_000,
+  });
+  const leftKeyShown = () => page.evaluate(() => Boolean((window as StudioHook).__studio?.keyPoint(1, 1)));
+  expect(await leftKeyShown()).toBe(true);
+  await page.evaluate(() => {
+    (window as DemoHook).__demo?.setRemote(false);
+  });
+  // l'état est relu avec l'aperçu LED, ralenti ici par le rendu 3D logiciel
+  await expect.poll(leftKeyShown, { timeout: 15_000 }).toBe(false);
+  expect(await keyPoint(page, 7, 2)).toBeTruthy();
+  await page.evaluate(() => {
+    (window as DemoHook).__demo?.setRemote(true);
+  });
+  await expect.poll(leftKeyShown, { timeout: 15_000 }).toBe(true);
   expect(errors).toEqual([]);
 });
