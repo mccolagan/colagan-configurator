@@ -1590,11 +1590,21 @@ svg.keyboard .key.is-drop rect:not(.key__led) {
   margin-left: 8px;
 }
 
+/* toutes les catégories visibles, sur plusieurs lignes : un clic suffit, sans défilement horizontal */
 .picker__categories {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
-  overflow-x: auto;
-  scrollbar-width: none;
+}
+
+.picker__categories .cat {
+  height: 26px;
+  padding: 0 10px;
+  background: var(--fill-2);
+}
+
+.picker__categories .cat[aria-pressed='true'] {
+  background: var(--fg);
 }
 
 .picker__grid {
@@ -1645,6 +1655,17 @@ button.keycode .c {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+button.keycode.is-long .m {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 11px;
+  line-height: 1.15;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 button.keycode--risky .m {

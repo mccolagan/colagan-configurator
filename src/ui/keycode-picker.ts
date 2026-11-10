@@ -241,6 +241,8 @@ export class KeycodePicker {
         const code = document.createElement('span');
         code.className = 'c';
         code.textContent = entry.id.replace(/^KC_/, '');
+        // libellés longs (OSM LCtl, Vol+…) : deux lignes en plus petit plutôt que tronqués
+        if (Array.from(main.textContent).length > 3) button.classList.add('is-long');
         button.append(main, code);
         button.title = entry.tooltip ? `${entry.id} : ${entry.tooltip}` : entry.id;
         if (!entry.masked && !this.pendingMask) {
