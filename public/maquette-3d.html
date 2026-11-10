@@ -11,7 +11,7 @@
 <style>
 @property --siri-a { syntax:'<angle>'; initial-value:0deg; inherits:false; }
 :root {
-  /* Layout : scène 3D plein cadre façon photo produit ; vues en segmenté au centre du haut, couches à gauche, inspecteur à droite, rien en bas */
+  /* Layout : scène 3D plein cadre façon photo produit ; inspecteur à droite ; vues (haut), couches (bas), défilant et toasts alignés sur l'axe de la zone libre */
   --bg:#F5F5F7; --panel:rgba(255,255,255,.74); --cell:#FFFFFF; --fill:rgba(118,118,128,.12); --fill-2:rgba(0,0,0,.035);
   --fg:#1D1D1F; --muted:#6E6E73; --faint:#AEAEB2;
   --line:rgba(0,0,0,.08); --line-2:rgba(0,0,0,.14); --hi:rgba(255,255,255,.9);
@@ -57,7 +57,7 @@ button { cursor:pointer; }
 #stage { position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; outline:none; }
 #stage.is-hover { cursor:pointer; }
 #stage.is-paint { cursor:crosshair; }
-.ui { position:relative; height:100%; pointer-events:none; }
+.ui { position:relative; height:100%; pointer-events:none; --insp:348px; --axis:calc((100% - var(--insp) - 8px) / 2); --dock-space:68px; }
 .ui > * { pointer-events:auto; }
 .glass { background:var(--panel); -webkit-backdrop-filter:blur(30px) saturate(1.8); backdrop-filter:blur(30px) saturate(1.8); border:.5px solid var(--line); box-shadow:var(--shadow), inset 0 .5px 0 var(--hi); }
 
@@ -74,6 +74,7 @@ button { cursor:pointer; }
 .orb { width:10px; height:10px; border-radius:50%; background:var(--faint); flex:none; }
 .pill[data-state="on"] .orb { background:conic-gradient(from var(--siri-a), var(--siri)); animation:siri-spin 3s linear infinite; box-shadow:0 0 8px rgba(164,92,255,.6); }
 .pill .sub { color:var(--muted); font-weight:400; }
+.pill[data-state="partial"] .orb { background:var(--warn); box-shadow:0 0 6px color-mix(in srgb, var(--warn) 55%, transparent); }
 
 /* Contrôle segmenté */
 .seg { position:relative; display:inline-flex; padding:3px; border-radius:999px; gap:0; }
@@ -82,20 +83,37 @@ button { cursor:pointer; }
 .seg button:hover { color:var(--fg); }
 .seg button[aria-pressed="true"], .seg button[aria-selected="true"] { color:var(--fg); }
 .seg .thumb { position:absolute; top:3px; bottom:3px; left:3px; width:0; border-radius:999px; background:var(--thumb); box-shadow:var(--thumb-shadow); transition:transform .38s cubic-bezier(.3,.8,.2,1), width .38s cubic-bezier(.3,.8,.2,1); }
-.views { position:absolute; left:50%; top:4px; transform:translateX(-50%); }
+.views { position:absolute; left:max(var(--axis), 372px); top:4px; transform:translateX(-50%); }
 
-/* Couches */
-.rail { position:absolute; top:76px; left:0; width:232px; max-height:calc(100% - 76px - 24px); overflow:auto; padding:8px; box-sizing:border-box; border-radius:22px; display:flex; flex-direction:column; gap:1px; scrollbar-width:none; }
-.rail-h { font-size:12px; font-weight:600; color:var(--muted); padding:8px 10px 6px; }
-.layer { display:grid; grid-template-columns:8px 1fr auto; column-gap:11px; align-items:center; padding:9px 10px; border:0; border-radius:12px; background:transparent; text-align:left; }
-.layer:hover { background:var(--fill-2); }
-.layer[aria-pressed="true"] { background:var(--fill); }
-.layer .ldot { width:8px; height:8px; border-radius:50%; background:var(--tint); }
-.layer .lname { font-size:14px; font-weight:500; }
+/* Couches : barre du bas, même contrôle segmenté que les vues (pastille de teinte, nom, numéro) */
+.dock { position:absolute; bottom:16px; left:var(--axis); transform:translateX(-50%); max-width:calc(100% - var(--insp) - 8px); box-sizing:border-box; padding:4px; overflow-x:auto; overscroll-behavior-x:contain; scrollbar-width:none; }
+.dock::-webkit-scrollbar { display:none; }
+.dock .thumb { top:4px; bottom:4px; }
+.seg button.layer { display:flex; align-items:center; gap:7px; height:36px; padding:0 13px 0 12px; flex:none; }
+.layer .ldot { position:relative; width:8px; height:8px; border-radius:50%; background:var(--tint); flex:none; }
 .layer .lnum { font:400 11px/1 var(--font-mono); color:var(--faint); }
-.layer .ldesc { grid-column:2 / span 2; font-size:12px; color:var(--muted); margin-top:1px; }
-.layer canvas { grid-column:1 / span 3; width:100%; height:auto; aspect-ratio:96/30; margin-top:10px; display:none; }
-.layer[aria-pressed="true"] canvas { display:block; }
+/* Compact (barre trop étroite) : pastille et numéro, le nom seulement sur la couche choisie */
+.dock.compact button.layer { padding:0 10px; gap:6px; flex:1 0 auto; justify-content:center; }
+.dock.compact .layer:not([aria-pressed="true"]) .lname { display:none; }
+.dock.compact .layer[aria-pressed="true"] .lnum { display:none; }
+.dock.compact .layer .lnum { display:inline; font-size:12px; color:var(--muted); }
+/* Couche active sur le clavier : anneau à la teinte de la couche, avec une onde lente */
+.layer.is-live .ldot, .lcard.is-live .ldot { outline:1.5px solid var(--tint); outline-offset:2px; }
+.layer.is-live .ldot::after { content:""; position:absolute; inset:-3.5px; border-radius:50%; border:1.5px solid var(--tint); animation:live-ping 2.6s ease-out 3; }
+@keyframes live-ping { 0% { transform:scale(1); opacity:.7; } 70%, 100% { transform:scale(2.1); opacity:0; } }
+
+/* Fiche de couche : description, accès et mini-carte, au survol ou au focus d'une couche */
+.lcard { position:absolute; left:0; bottom:calc(var(--dock-space) + 10px); width:248px; box-sizing:border-box; padding:12px 14px 13px; border-radius:18px; display:flex; flex-direction:column; gap:3px; z-index:6; pointer-events:none; transform:translateX(-50%); transition:opacity .18s, translate .18s; }
+.lcard.out { opacity:0; translate:0 6px; }
+.lcard.glide { transition:opacity .18s, translate .18s, left .24s cubic-bezier(.3,.8,.2,1); }
+.lcard .lc-h { display:flex; align-items:center; gap:8px; font-weight:600; font-size:14px; letter-spacing:-.01em; }
+.lcard .ldot { width:8px; height:8px; border-radius:50%; background:var(--tint); flex:none; }
+.lcard .lnum { margin-left:auto; font:400 11px/1 var(--font-mono); color:var(--faint); }
+.lcard .lc-d { font-size:12.5px; color:var(--muted); }
+.lcard canvas { width:100%; height:auto; aspect-ratio:192/60; margin:8px 0 4px; }
+.lcard .lc-a { font-size:11.5px; color:var(--faint); }
+.lcard .lc-live { display:flex; align-items:center; gap:7px; font-size:11.5px; font-weight:500; color:var(--fg); margin-top:4px; }
+.lcard .lc-live i { width:7px; height:7px; border-radius:50%; background:conic-gradient(from var(--siri-a), var(--siri)); animation:siri-spin 3s linear infinite; }
 
 /* Inspecteur */
 .inspector { position:absolute; top:76px; right:0; width:348px; bottom:16px; border-radius:22px; display:flex; flex-direction:column; overflow:hidden; }
@@ -175,7 +193,7 @@ button.item.is-cur { background:var(--accent-soft); }
 .pop .h { padding:10px 16px 12px; margin:0; }
 
 /* Saisie en direct */
-.ticker { position:absolute; bottom:24px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:5px; height:40px; padding:0 8px; border-radius:999px; pointer-events:none; transition:opacity .4s, transform .4s; }
+.ticker { position:absolute; bottom:calc(var(--dock-space) + 10px); left:var(--axis); transform:translateX(-50%); display:flex; align-items:center; gap:5px; height:40px; padding:0 8px; border-radius:999px; pointer-events:none; transition:opacity .4s, transform .4s; }
 .ticker.idle { opacity:0; transform:translateX(-50%) translateY(8px); }
 .ticker kbd { min-width:26px; height:26px; padding:0 7px; box-sizing:border-box; border-radius:8px; display:grid; place-items:center; font:500 12.5px/1 var(--font); background:var(--cell); box-shadow:var(--cell-shadow); animation:tick .3s cubic-bezier(.3,.8,.2,1.2); }
 @keyframes tick { from { transform:scale(.6); opacity:0; } }
@@ -198,12 +216,18 @@ button.item.is-cur { background:var(--accent-soft); }
 .plabel span { color:var(--muted); }
 .slabel { position:absolute; top:0; left:0; pointer-events:auto; display:flex; align-items:center; gap:7px; height:26px; padding:0 11px 0 9px; border-radius:999px; font-size:12px; font-weight:500; border:.5px solid var(--line); background:var(--panel); -webkit-backdrop-filter:blur(20px); backdrop-filter:blur(20px); white-space:nowrap; color:var(--muted); }
 .slabel i { width:7px; height:7px; border-radius:50%; background:var(--tint); }
+/* État du split : étiquette au-dessus de chaque moitié (maître branché au PC, moitié non reliée) */
+.htag { position:absolute; top:0; left:0; display:flex; align-items:center; gap:7px; height:26px; padding:0 11px 0 9px; border-radius:999px; font-size:12px; font-weight:500; color:var(--muted); white-space:nowrap; opacity:0; transition:opacity .35s; }
+.htag i { width:7px; height:7px; border-radius:50%; background:var(--on); flex:none; }
+.htag b { font-weight:600; color:var(--fg); }
+.htag.warn i, .htag.missing i { background:var(--warn); }
+.htag.missing { color:var(--fg); }
 .slabel.is-cur { color:var(--fg); box-shadow:0 0 0 1.5px var(--fg); }
 #tip { position:fixed; top:0; left:0; pointer-events:none; padding:8px 11px; border-radius:12px; font-size:12.5px; line-height:1.4; z-index:31; max-width:260px; }
 #tip code { font:400 11px/1 var(--font-mono); color:var(--muted); }
 
 /* Toasts, palette, feuilles */
-#toasts { position:absolute; bottom:76px; left:50%; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:8px; z-index:20; pointer-events:none; width:min(440px, 100%); }
+#toasts { position:absolute; bottom:calc(var(--dock-space) + 62px); left:var(--axis); transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:8px; z-index:20; pointer-events:none; width:min(440px, 100%); }
 .toast { pointer-events:auto; display:flex; align-items:center; gap:14px; padding:9px 9px 9px 16px; border-radius:999px; font-size:13px; animation:toast-in .4s cubic-bezier(.3,.8,.2,1.15); max-width:100%; box-sizing:border-box; }
 .toast .t { flex:1; min-width:0; }
 .toast.warn .t::before { content:""; display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--warn); margin-right:8px; vertical-align:1px; }
@@ -232,21 +256,25 @@ kbd.k { font:500 11px/1 var(--font); padding:3px 6px; border-radius:6px; backgro
 #fallback { position:absolute; inset:0; display:grid; place-items:center; padding:24px; text-align:center; color:var(--muted); z-index:50; background:var(--bg); }
 
 @media (max-width: 1180px) {
-  .rail { width:200px; }
+  .ui { --insp:320px; }
   .inspector { width:320px; }
   .seg button { padding:0 12px; }
 }
 @media (max-width: 820px) {
   .top { top:10px; }
   .brand span { display:none; }
-  .views { position:fixed; top:auto; bottom:12px; left:max(16px, env(safe-area-inset-left, 0px)); right:max(16px, env(safe-area-inset-right, 0px)); transform:none; display:flex; overflow-x:auto; scrollbar-width:none; }
+  .ui { --axis:50%; }
+  .pill { white-space:nowrap; }
+  .pill .pname, .htag .long { display:none; }
+  #plugSeg { grid-template-columns:1fr 1fr !important; gap:2px; }
+  #plugSeg .thumb { display:none; }
+  #plugSeg button[aria-pressed="true"] { background:var(--thumb); box-shadow:var(--thumb-shadow); }
+  .views { top:52px; left:0; right:0; transform:none; display:flex; overflow-x:auto; scrollbar-width:none; }
   .views button { flex:1 0 auto; padding:0 10px; }
   .pop { position:fixed; top:64px; left:16px; right:16px; width:auto; }
-  .rail { top:62px; right:0; width:auto; max-height:none; flex-direction:row; overflow-x:auto; padding:5px; border-radius:16px; }
-  .rail-h, .layer .ldesc, .layer canvas, .layer .lnum { display:none !important; }
-  .layer { grid-template-columns:8px auto; padding:7px 12px; flex:none; }
-  .layer .lname { font-size:13px; white-space:nowrap; }
-  .inspector { top:auto; left:0; width:auto; bottom:62px; max-height:46%; border-radius:20px; }
+  .dock { position:fixed; bottom:max(12px, env(safe-area-inset-bottom, 0px)); left:max(16px, env(safe-area-inset-left, 0px)); right:max(16px, env(safe-area-inset-right, 0px)); transform:none; max-width:none; }
+  .lcard { bottom:calc(var(--dock-space) + 8px); z-index:21; }
+  .inspector { top:auto; left:0; width:auto; bottom:calc(var(--dock-space) + 6px); max-height:46%; border-radius:20px; }
   .inspector.collapsed .panel { display:none; }
   .sheet-toggle { display:grid; flex:none; width:32px; height:32px; }
   .inspector.collapsed .sheet-toggle svg { transform:rotate(180deg); }
@@ -292,7 +320,8 @@ kbd.k { font:500 11px/1 var(--font); padding:3px 6px; border-radius:6px; backgro
       </div>
     </header>
 
-    <nav class="rail glass" id="rail" aria-label="Couches"><div class="rail-h">Couches</div></nav>
+    <nav class="seg glass dock" id="dock" aria-label="Couches"><span class="thumb"></span></nav>
+    <div class="lcard glass out" id="layerCard" aria-hidden="true"><div class="lc-h"><span class="ldot"></span><span id="lcName"></span><span class="lnum" id="lcNum"></span></div><div class="lc-d" id="lcDesc"></div><canvas id="lcMini" width="384" height="120"></canvas><div class="lc-a" id="lcAccess"></div><div class="lc-live" id="lcLive" hidden><i></i>Active sur le clavier</div></div>
 
     <aside class="inspector glass" id="inspector" aria-label="Inspecteur">
       <div class="insp-head">
@@ -328,6 +357,8 @@ kbd.k { font:500 11px/1 var(--font); padding:3px 6px; border-radius:6px; backgro
     <div class="sheet glass" role="dialog" aria-modal="true" aria-labelledby="connectTitle">
       <h2 id="connectTitle">Connecter le clavier</h2>
       <p>Dans l'application, ce bouton ouvre le sélecteur WebHID de Chrome et lit le clavier en direct. Ici, la séquence est simulée avec les valeurs réelles de ton firmware : rien n'est envoyé.</p>
+      <div class="h" style="margin:0">Branchement simulé</div>
+      <div class="seg plain" id="plugSeg" aria-label="Branchement simulé" style="display:grid;grid-template-columns:repeat(4, 1fr);margin-top:-6px"><span class="thumb"></span><button type="button" data-plug="both" aria-pressed="true">Les deux</button><button type="button" data-plug="right" aria-pressed="false">Droite seule</button><button type="button" data-plug="left" aria-pressed="false">Gauche seule</button><button type="button" data-plug="both-left" aria-pressed="false">Gauche au PC</button></div>
       <pre class="log" id="log">En attente.</pre>
       <div class="btns"><button class="btn" id="closeConnect" type="button">Fermer</button><button class="btn primary" id="simBtn" type="button">Simuler la connexion</button></div>
     </div>
@@ -748,6 +779,17 @@ function buildHalf(h) {
   return half;
 }
 
+// Flou de légende calculé sur le GPU : la texture est lue dans un niveau de mipmap plus grossier (biais uBlur),
+// sans redessiner le canvas ni renvoyer la texture.
+const BLUR_MAP = THREE.ShaderChunk.map_fragment.replace('texture2D( map, vMapUv )', 'texture2D( map, vMapUv, uBlur )');
+function blurrable(m) {
+  m.userData.blur = { value: 0 };
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uBlur = m.userData.blur;
+    sh.fragmentShader = 'uniform float uBlur;\n' + sh.fragmentShader.replace('#include <map_fragment>', BLUR_MAP);
+  };
+  return m;
+}
 function buildKey(half, k) {
   const g = new THREE.Group();
   g.position.set(k.cx, 0, k.cy); g.rotation.y = -k.rot * Math.PI / 180;
@@ -759,7 +801,7 @@ function buildKey(half, k) {
   const skirt = new THREE.Mesh(skirtGeo(k.w), skirtMat); skirt.position.y = CAP_Y;
   const lc = document.createElement('canvas'); lc.width = Math.round(192 * k.w); lc.height = 192;
   const tex = new THREE.CanvasTexture(lc); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
-  const legendMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, color: 0xffffff, toneMapped: false });
+  const legendMat = blurrable(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, color: 0xffffff, toneMapped: false }));
   const legend = new THREE.Mesh(legendGeo(k.w), legendMat); legend.position.y = CAP_Y + CAP_H + .003;
   inner.add(skirt, cap, legend);
   cap.userData.key = k.i; skirt.userData.key = k.i;
@@ -986,7 +1028,10 @@ function paintLegend(g, W, H, L, i) {
   if (lab.kind === 'layer') { g.fillStyle = LAYER_TINT[lab.layer] || '#fff'; g.beginPath(); g.arc(22, 22, 7, 0, Math.PI * 2); g.fill(); }
   if (lab.kind === 'danger') { g.fillStyle = '#FF453A'; g.beginPath(); g.arc(22, 22, 7, 0, Math.PI * 2); g.fill(); }
 }
-function drawLegend(k, L) { paintLegend(k.lctx, k.lcanvas.width, k.lcanvas.height, L, k.i); k.tex.needsUpdate = true; }
+function drawLegend(k, L) {
+  paintLegend(k.lctx, k.lcanvas.width, k.lcanvas.height, L, k.i);
+  k.tex.needsUpdate = true;
+}
 
 // ============================================================================
 // Effets RGB (effets QMK activés dans keyboard.json)
@@ -1064,9 +1109,11 @@ const insets = { l: 0, r: 0, t: 0, b: 0 };
 let camTween = null;
 function measure() {
   const W = innerWidth, H = innerHeight, mobile = W <= 820;
-  const rail = $('#rail').getBoundingClientRect(), insp = $('#inspector').getBoundingClientRect(), views = $('#views').getBoundingClientRect();
-  if (mobile) { insets.l = 0; insets.r = 0; insets.t = rail.bottom + 6; insets.b = H - Math.min(insp.top, views.top) + 6; }
-  else { insets.l = rail.right + 8; insets.r = W - insp.left + 8; insets.t = 76; insets.b = 24; }
+  const dock = $('#dock').getBoundingClientRect();
+  $('.ui').style.setProperty('--dock-space', Math.round(H - dock.top) + 'px');
+  const insp = $('#inspector').getBoundingClientRect(), views = $('#views').getBoundingClientRect();
+  if (mobile) { insets.l = 0; insets.r = 0; insets.t = views.bottom + 6; insets.b = H - Math.min(insp.top, dock.top) + 6; }
+  else { insets.l = 28; insets.r = W - insp.left + 8; insets.t = views.bottom + 12; insets.b = H - dock.top + 10; }
 }
 function resize() {
   const W = innerWidth, H = innerHeight;
@@ -1075,7 +1122,14 @@ function resize() {
   measure();
   camera.setViewOffset(W, H, -(insets.l - insets.r) / 2, -(insets.t - insets.b) / 2, W, H);
   camera.updateProjectionMatrix();
+  fitDock();
   $$('.seg').forEach(syncSeg);
+  if (cardL != null) placeCard(cardL);
+}
+function fitDock() {
+  const d = $('#dock');
+  d.classList.toggle('compact', false);
+  d.classList.toggle('compact', d.scrollWidth > d.clientWidth + 1);
 }
 function fitRadius(view) {
   const W = innerWidth, H = innerHeight;
@@ -1109,53 +1163,94 @@ function siri(ms) {
 }
 
 // ============================================================================
-// Rail des couches
+// Barre des couches (bas) et fiche de couche au survol
 // ============================================================================
-let railBuilt = false;
-const miniCanvases = [];
+let railBuilt = false, cardL = null, cardTimer = 0;
 function buildRail() {
-  const rail = $('#rail');
+  const dock = $('#dock');
   LAYER_NAMES.forEach((name, L) => {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'layer'; b.dataset.layer = L; b.style.setProperty('--tint', LAYER_TINT[L]);
     b.setAttribute('aria-pressed', L === state.layer ? 'true' : 'false');
-    b.innerHTML = `<span class="ldot"></span><span class="lname">${esc(name)}</span><span class="lnum">${L}</span><span class="ldesc">${esc(LAYER_DESC[L])}</span><canvas width="192" height="60"></canvas>`;
-    b.addEventListener('click', () => { setLayer(L); state.base = L; renderTry(); });
-    rail.appendChild(b);
-    miniCanvases[L] = b.querySelector('canvas');
+    b.innerHTML = `<span class="ldot"></span><span class="lname">${esc(name)}</span><span class="lnum">${L}</span>`;
+    b.addEventListener('click', () => { setLayer(L); state.base = L; renderTry(); if (b.dataset.touch) showCard(L, 1800); });
+    b.addEventListener('pointerdown', e => { b.dataset.touch = e.pointerType === 'touch' ? '1' : ''; });
+    b.addEventListener('pointerenter', e => {
+      if (e.pointerType === 'touch') return;
+      clearTimeout(cardTimer);
+      if (cardL != null) showCard(L); else cardTimer = setTimeout(() => showCard(L), 220);
+    });
+    b.addEventListener('pointerleave', hideCardSoon);
+    b.addEventListener('focus', () => { if (b.matches(':focus-visible')) showCard(L); });
+    b.addEventListener('blur', hideCardSoon);
+    dock.appendChild(b);
   });
   railBuilt = true;
   LAYER_NAMES.forEach((_, L) => drawMini(L));
 }
-function drawMini(L) {
-  const c = miniCanvases[L]; if (!c) return;
-  const g = c.getContext('2d'), W = c.width, H = c.height;
+function drawMap(c, L) {
+  const g = c.getContext('2d'), W = c.width, H = c.height, k0 = W / 192;
   g.clearRect(0, 0, W, H);
   const sx = W / 18.9, sy = H / 6.3, faint = cssVar('--faint'), line = cssVar('--line-2');
   KEYS.forEach(k => {
     const kc = state.keymap[L][k.i], col = state.ledmaps[L][k.i];
     g.save(); g.translate((k.cx + .3) * sx, (k.cy + .1) * sy); g.rotate(k.rot * Math.PI / 180);
     const w = k.w * sx * .84, hh = sy * .84;
-    g.beginPath(); g.roundRect(-w / 2, -hh / 2, w, hh, 2.5);
-    if (kc === T) { g.strokeStyle = line; g.lineWidth = 1; g.stroke(); }
+    g.beginPath(); g.roundRect(-w / 2, -hh / 2, w, hh, 2.5 * k0);
+    if (kc === T) { g.strokeStyle = line; g.lineWidth = k0; g.stroke(); }
     else if (kc === X) { g.fillStyle = line; g.fill(); }
     else { g.fillStyle = col && col[0] + col[1] + col[2] > 0 ? `rgb(${col.join(',')})` : faint; g.fill(); }
     g.restore();
   });
 }
+function drawMini(L) {
+  if (cardL === L) drawMap($('#lcMini'), L);
+}
+function fillCard(L) {
+  const c = $('#layerCard'), live = state.kbLayer === L;
+  c.style.setProperty('--tint', LAYER_TINT[L]); c.classList.toggle('is-live', live);
+  $('#lcName').textContent = LAYER_NAMES[L]; $('#lcNum').textContent = 'Couche ' + L;
+  $('#lcDesc').textContent = LAYER_DESC[L]; $('#lcAccess').textContent = 'Accès : ' + LAYER_ACCESS[L];
+  $('#lcLive').hidden = !live;
+  drawMap($('#lcMini'), L);
+}
+function placeCard(L) {
+  const c = $('#layerCard'), b = $(`#dock .layer[data-layer="${L}"]`), ui = $('.ui'); if (!b) return;
+  const u = ui.getBoundingClientRect(), r = b.getBoundingClientRect(), w = c.offsetWidth || 248;
+  const right = innerWidth <= 820 ? u.width : u.width - parseFloat(getComputedStyle(ui).getPropertyValue('--insp')) - 8;
+  c.style.left = clamp(r.left + r.width / 2 - u.left, w / 2, Math.max(w / 2, right - w / 2)) + 'px';
+}
+function showCard(L, ms = 0) {
+  clearTimeout(cardTimer);
+  const c = $('#layerCard');
+  c.classList.toggle('glide', !c.classList.contains('out'));
+  cardL = L; fillCard(L); placeCard(L);
+  c.classList.remove('out');
+  if (ms) cardTimer = setTimeout(hideCard, ms);
+}
+function hideCard() { clearTimeout(cardTimer); cardL = null; $('#layerCard').classList.add('out'); }
+function hideCardSoon() { clearTimeout(cardTimer); cardTimer = setTimeout(hideCard, 160); }
 function refreshRail() {
-  $$('.layer').forEach(b => b.setAttribute('aria-pressed', +b.dataset.layer === state.layer ? 'true' : 'false'));
+  $$('#dock .layer').forEach(b => {
+    const L = +b.dataset.layer, live = L === state.kbLayer;
+    b.setAttribute('aria-pressed', L === state.layer ? 'true' : 'false');
+    b.classList.toggle('is-live', live);
+    b.setAttribute('aria-label', `${L} · ${LAYER_NAMES[L]}${live ? ' (active sur le clavier)' : ''}`);
+  });
+  const d = $('#dock'), on = $('#dock .layer[aria-pressed="true"]');
+  fitDock(); syncSeg(d);
+  if (on && d.scrollWidth > d.clientWidth) d.scrollTo({ left: on.offsetLeft - (d.clientWidth - on.offsetWidth) / 2, behavior: REDUCED ? 'auto' : 'smooth' });
+  if (cardL != null) fillCard(cardL);
 }
 
 // ============================================================================
-// Changement de couche : vague de bascule depuis la touche d'origine
+// Changement de couche : les légendes se floutent puis reviennent nettes sur la nouvelle couche
 // ============================================================================
 function setLayer(L, originIdx = null) {
   if (L === state.layer) return;
   state.layer = L;
-  const o = originIdx != null ? KEYS[originIdx] : { cx: L >= 2 ? 15 : 3, cy: 0 };
   const t = clock();
-  KEYS.forEach(k => { k.flip = { start: t + (REDUCED ? 0 : Math.hypot(k.cx - o.cx, k.cy - o.cy) * .028), layer: L, swapped: false }; });
+  KEYS.forEach(k => { k.flip = { start: t, layer: L, swapped: false }; });
   refreshRail(); refreshStackLabels(); renderKeys(); renderLight(); renderTry();
 }
 
@@ -1519,7 +1614,7 @@ function pressVisual(i, physical = true) {
   const k = KEYS[i]; k.pressT = 1; k.flash = 1;
   hits.push({ x: k.cx, y: k.cy, t: clock() }); if (hits.length > 24) hits.shift();
   heat[i] += 1;
-  if (k.half === 0) sendPulse(splitCurve, .45);
+  if (k.half === 0 && linkUp()) sendPulse(splitCurve, .45);
   if (!physical) return;
   siri(1400);
   const tk = $('#ticker'), lab = labelOf(resolve(state.layer, i).kc);
@@ -1603,11 +1698,52 @@ function copyKeymap() {
 }
 function resetGeo() { Object.assign(state.split, { gap: 3.5, tent: 0, splay: 0 }); $('#gap').value = 3.5; $('#tent').value = 0; $('#splay').value = 0; geoUI(); }
 
+// ============================================================================
+// État du split : moitié branchée au PC (maître) et lien avec l'autre moitié.
+// Dans l'app : octets 5 (maître gauche/droite) et 6 (drapeau « moitié distante reliée ») de la réponse info
+// de la commande 0xC0, déjà relue chaque seconde par l'aperçu LED.
+// ============================================================================
+const SIDE = ['gauche', 'droite'];
+state.plug = 'both'; state.link = { master: 1, remote: true };
+function linkFor(plug) { return { master: plug === 'left' || plug === 'both-left' ? 0 : 1, remote: plug === 'both' || plug === 'both-left' }; }
+function absentHalf() { return state.connected && !state.link.remote ? 1 - state.link.master : null; }
+function linkUp() { return !state.connected || state.link.remote; }
+function linkLog(l) {
+  const m = SIDE[l.master], o = SIDE[1 - l.master];
+  return [
+    [l.master ? 'ok' : '', `Maître : moitié ${m}, branchée au PC`],
+    l.remote ? ['ok', `Moitié ${o} reliée`] : ['', `Moitié ${o} injoignable : ses touches et ses LED ne répondent pas`],
+    ['ok', l.remote ? 'Connecté · aperçu LED à 44 images/s' : `Connecté · aperçu LED de la moitié ${m} seulement`],
+  ];
+}
+function updatePill() {
+  const pill = $('#pill'), txt = $('#pillText');
+  if (!state.connected) { pill.dataset.state = 'demo'; txt.textContent = 'Démo'; pill.title = ''; return; }
+  const l = state.link, m = SIDE[l.master], o = SIDE[1 - l.master];
+  pill.dataset.state = l.remote && l.master ? 'on' : 'partial';
+  txt.innerHTML = `<span class="pname">Colagan V2</span> <span class="sub">${!l.remote ? m + ' seule' : l.master ? 'connecté' : 'maître gauche'}</span>`;
+  pill.title = `Maître : moitié ${m}, branchée au PC · moitié ${o} ${l.remote ? 'reliée' : 'non reliée'}`;
+}
+function setPlug(plug) {
+  state.plug = plug;
+  $$('#plugSeg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.plug === plug ? 'true' : 'false'));
+  syncSeg($('#plugSeg'));
+  if (!state.connected) return;
+  const before = state.link, after = linkFor(plug), o = SIDE[1 - after.master];
+  state.link = after; updatePill();
+  if (before.master !== after.master) toast(after.master ? 'Droite branchée au PC' : 'La gauche est branchée au PC : keymap et couleurs viennent de sa mémoire. Branche plutôt la droite.', { warn: !after.master });
+  else if (before.remote && !after.remote) toast(`Moitié ${o} injoignable : vérifie le câble entre les moitiés`, { warn: true });
+  else if (!before.remote && after.remote) toast(`Moitié ${o} reliée`);
+  const log = $('#log');
+  log.innerHTML += linkLog(after).slice(0, 2).map(([c, x]) => `<span class="${c}">${esc(x)}</span>\n`).join('');
+  log.scrollTop = log.scrollHeight;
+}
+
 let simRunning = false;
 $('#simBtn').addEventListener('click', () => {
   if (simRunning) return;
   if (state.connected) {
-    state.connected = false; $('#pill').dataset.state = 'demo'; $('#pillText').textContent = 'Démo'; $('#simBtn').textContent = 'Simuler la connexion';
+    state.connected = false; state.kbLayer = null; refreshRail(); updatePill(); $('#simBtn').textContent = 'Simuler la connexion';
     $('#log').textContent = 'Déconnecté.'; return;
   }
   simRunning = true;
@@ -1620,16 +1756,15 @@ $('#simBtn').addEventListener('click', () => {
     ['', '8 couches · 16 macros · 32 entrées dynamiques'],
     ['', 'VialRGB · 23 effets · luminosité max 64'],
     ['', 'Flux LED 0xC0 · protocole LED v2'],
-    ['ok', 'Moitié gauche joignable'],
-    ['ok', 'Connecté · aperçu LED à 44 images/s'],
+    ...linkLog(linkFor(state.plug)),
   ];
   const log = $('#log'); log.innerHTML = '';
   siri(REDUCED ? 0 : 260 * lines.length + 1600);
   lines.forEach(([cls, txt], n) => setTimeout(() => {
     log.innerHTML += `<span class="${cls}">${esc(txt)}</span>\n`; log.scrollTop = log.scrollHeight;
     if (n === lines.length - 1) {
-      simRunning = false; state.connected = true;
-      $('#pill').dataset.state = 'on'; $('#pillText').innerHTML = 'Colagan V2 <span class="sub">connecté</span>';
+      simRunning = false; state.connected = true; state.kbLayer = 0; state.link = linkFor(state.plug); refreshRail(); updatePill();
+      if (!state.link.master) toast('La gauche est branchée au PC : keymap et couleurs viennent de sa mémoire. Branche plutôt la droite.', { warn: true });
       $('#simBtn').textContent = 'Déconnecter';
       KEYS.forEach(k => { k.flash = .7 - k.led * .01; });
     }
@@ -1637,13 +1772,15 @@ $('#simBtn').addEventListener('click', () => {
 });
 $('#closeConnect').addEventListener('click', () => { $('#connectScrim').hidden = true; });
 $('#bootOk').addEventListener('click', () => { $('#bootScrim').hidden = true; });
-$('#pill').addEventListener('click', () => openScrim('#connectScrim'));
+$('#pill').addEventListener('click', () => { openScrim('#connectScrim'); syncSeg($('#plugSeg')); });
+$$('#plugSeg button').forEach(b => b.addEventListener('click', () => setPlug(b.dataset.plug)));
 $('#cmdBtn').addEventListener('click', openPalette);
 $('#undoBtn').addEventListener('click', undo);
 $$('#tabs button').forEach(t => t.addEventListener('click', () => setMode(t.dataset.mode)));
 $('#sheetToggle').addEventListener('click', () => { $('#inspector').classList.toggle('collapsed'); resize(); });
 $$('#views button').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
 $('#geoBtn').addEventListener('click', () => { const p = $('#geoPop'); p.hidden = !p.hidden; $('#geoBtn').setAttribute('aria-expanded', String(!p.hidden)); });
+$('#dock').addEventListener('scroll', () => { if (cardL != null) placeCard(cardL); }, { passive: true });
 ['gap', 'tent', 'splay'].forEach(id => $('#' + id).addEventListener('input', e => { state.split[id] = +e.target.value; geoUI(); }));
 $('#geoReset').addEventListener('click', resetGeo);
 $('#caseOn').addEventListener('change', e => { state.caseOn = e.target.checked; });
@@ -1679,6 +1816,13 @@ const stackLabels = LAYER_NAMES.map((n, L) => {
   return { el, a, L };
 });
 function refreshStackLabels() { stackLabels.forEach(s => s.el.classList.toggle('is-cur', s.L === state.layer)); }
+const halfTags = [0, 1].map(h => {
+  const el = document.createElement('div'); el.className = 'htag glass'; labelsBox.appendChild(el);
+  const xs = HALF_KEYS[h].map(k => k.cx);
+  const a = new THREE.Object3D(); a.position.set((Math.min(...xs) + Math.max(...xs)) / 2, PCB_TOP + CASE_TOP + .3, -.9);
+  halves[h].content.add(a);
+  return { el, a, h, html: '' };
+});
 const v3 = new THREE.Vector3();
 function toScreen(obj) {
   obj.getWorldPosition(v3); v3.project(camera);
@@ -1717,12 +1861,25 @@ function updateLabels() {
     s.el.style.transform = `translate(${Math.max(p.x, 110)}px, ${p.y}px) translate(-100%, -50%)`;
     s.el.style.opacity = clamp((stackF - .4) * 2.5, 0, 1); s.el.style.pointerEvents = 'auto';
   });
+  const tagsOn = state.connected && explodeF < .3 && stackF < .3;
+  halfTags.forEach(tg => {
+    const l = state.link, master = tg.h === l.master, missing = !l.remote && !master, show = tagsOn && (master || missing);
+    const name = tg.h ? 'Droite' : 'Gauche';
+    const html = master ? `<i></i><b>${name}</b> · maître<span class="long">, branchée au PC</span>` : `<i></i><b>${name}</b> · non reliée`;
+    if (tg.html !== html) { tg.el.innerHTML = html; tg.html = html; }
+    tg.el.classList.toggle('warn', master && !tg.h); tg.el.classList.toggle('missing', missing);
+    if (tg.el.style.opacity !== (show ? '1' : '0')) tg.el.style.opacity = show ? '1' : '0';
+    if (!show) return;
+    const p = toScreen(tg.a);
+    const w = tg.el.offsetWidth, x = clamp(p.x, w / 2 + 12, innerWidth - w / 2 - 12);
+    tg.el.style.transform = `translate(${x}px, ${p.y}px) translate(-50%, -100%)`;
+  });
 }
 
 // ============================================================================
 // Boucle d'animation
 // ============================================================================
-let explodeF = 0, xrayF = 0, stackF = 0, caseF = 1, idle = clock();
+let explodeF = 0, xrayF = 0, stackF = 0, caseF = 1, linkF = 1, idle = clock();
 const tmpC = new THREE.Color(), tmpC2 = new THREE.Color(), white = new THREE.Color(1, 1, 1), spillC = [new THREE.Color(), new THREE.Color()];
 let last = clock(), lastXray = false;
 const t0 = clock(), fxCtx = { rain, heat, hits };
@@ -1795,7 +1952,7 @@ function frame() {
   });
   chainMats.forEach(m => { m.uniforms.uT.value = t; m.uniforms.uO.value = xrayF; });
   const xr = xrayF > .01;
-  if (xr !== lastXray) { [...KEYS.map(k => k.capMat), caseMat].forEach(m => { m.transparent = xr; m.depthWrite = !xr; m.needsUpdate = true; }); lastXray = xr; }
+  if (xr !== lastXray) { caseMat.transparent = xr; caseMat.depthWrite = !xr; caseMat.needsUpdate = true; lastXray = xr; }
   caseMat.opacity = 1 - xrayF * .88;
   if (cablesDirty) { rebuildCables(); cablesDirty = false; }
   if (splitCable) splitCable.visible = !solo;
@@ -1817,33 +1974,41 @@ function frame() {
   }
   while (hits.length && t - hits[0].t > 2) hits.shift();
 
-  const bright = state.rgbOn ? Math.pow(state.val / 64, .7) : 0, boot = t - t0;
+  const bright = state.rgbOn ? Math.pow(state.val / 64, .7) : 0, boot = t - t0, gone = absentHalf(), xrOn = xrayF > .01;
+  linkF = damp(linkF, gone == null ? 1 : 0, 5, dt);
+  cableMat.opacity = .18 + .82 * linkF;
+  if (cableMat.transparent !== linkF < .99) { cableMat.transparent = linkF < .99; cableMat.needsUpdate = true; }
   spillC[0].setRGB(0, 0, 0); spillC[1].setRGB(0, 0, 0);
   KEYS.forEach(k => {
-    let hop = 0;
+    // changement de couche : la légende se floute (sur le GPU) et s'estompe, puis la nouvelle revient nette.
+    // Un seul redessin par touche, au plus flou, réparti sur quatre images pour éviter un à-coup.
+    let fade = 1;
     if (k.flip && t >= k.flip.start) {
-      const p = (t - k.flip.start) / .42;
-      if (!k.flip.swapped && p >= .5) { drawLegend(k, k.flip.layer); k.layerShown = k.flip.layer; k.flip.swapped = true; }
-      if (p >= 1) { k.legend.rotation.x = 0; k.flip = null; }
-      else { k.legend.rotation.x = Math.sin(p * Math.PI) * Math.PI / 2; hop = Math.sin(p * Math.PI) * .06; }
+      const p = REDUCED ? 1 : (t - k.flip.start) / .34, w = Math.sin(Math.min(1, p) * Math.PI);
+      if (!k.flip.swapped && p >= .4 + (k.i % 4) * .05) { drawLegend(k, k.flip.layer); k.layerShown = k.flip.layer; k.flip.swapped = true; }
+      if (p >= 1) { k.flip = null; k.legendMat.userData.blur.value = 0; }
+      else { fade = 1 - .6 * w; k.legendMat.userData.blur.value = 3.2 * w; }
     }
     k.press = damp(k.press, k.pressT, k.pressT > k.press ? 40 : 18, dt);
     k.lift = damp(k.lift, (k.i === state.hover && !painting ? .04 : 0) + (k.i === state.sel ? .07 : 0), 14, dt);
-    k.inner.position.y = k.lift + hop - k.press * TRAVEL;
+    k.inner.position.y = k.lift - k.press * TRAVEL;
     k.flash = Math.max(0, k.flash - dt * 2.6);
 
     const L = k.layerShown, lc = state.ledmaps[L][k.i];
     const rgb = lc ? [lc[0] / 255, lc[1] / 255, lc[2] / 255] : effectRGB(fxFor(L), k, t, fxCtx);
-    const f = bright * clamp((boot - .5 - k.led * .025) / .3, 0, 1), fl = k.flash * .45;
+    k.ghost = damp(k.ghost || 0, k.half === gone ? 1 : 0, 5, dt);
+    const ghostT = xrOn || k.ghost > .01;
+    if (k.capMat.transparent !== ghostT) { k.capMat.transparent = ghostT; k.capMat.depthWrite = !ghostT; k.capMat.needsUpdate = true; }
+    const f = bright * clamp((boot - .5 - k.led * .025) / .3, 0, 1) * (1 - k.ghost), fl = k.flash * .45;
     tmpC.setRGB(clamp(rgb[0] * f + fl, 0, 1), clamp(rgb[1] * f + fl, 0, 1), clamp(rgb[2] * f + fl, 0, 1), THREE.SRGBColorSpace);
     k.col.lerp(tmpC, 1 - Math.exp(-dt * 18));
     k.skirtMat.emissive.copy(k.col); k.skirtMat.emissiveIntensity = theme.skirtI;
     const mx = Math.max(k.col.r, k.col.g, k.col.b);
     if (mx < .004) k.legendMat.color.setScalar(theme.legendOff);
     else k.legendMat.color.copy(white).lerp(tmpC2.copy(k.col).multiplyScalar(1 / mx), theme.legendTint).multiplyScalar(theme.legendOff + (theme.legendOn - theme.legendOff) * Math.min(1, mx * 4));
-    k.legendMat.opacity = 1 - xrayF * .85;
-    k.capMat.opacity = 1 - xrayF * .86;
-    k.skirtMat.opacity = .94 * (1 - xrayF * .7);
+    k.legendMat.opacity = (1 - xrayF * .85) * fade * (1 - .72 * k.ghost);
+    k.capMat.opacity = (1 - xrayF * .86) * (1 - .62 * k.ghost);
+    k.skirtMat.opacity = .94 * (1 - xrayF * .7) * (1 - .7 * k.ghost);
     k.halfRef.chip.setColorAt(k.j, k.col);
     tmpC.copy(k.col).multiplyScalar(theme.glow); k.halfRef.glow.setColorAt(k.j, tmpC);
     spillC[k.half].add(k.col);
@@ -1872,6 +2037,7 @@ function frame() {
 // Démarrage
 // ============================================================================
 if (MOBILE) $('#inspector').classList.add('collapsed');
+state.kbLayer = null;
 buildRail();
 applyTheme();
 refreshRail(); renderKeys(); renderLight(); renderTry(); updateUndo(); geoUI();
@@ -1884,7 +2050,7 @@ addEventListener('resize', resize);
 if (document.fonts) Promise.all(['500 64px Inter', '400 32px Inter', '600 12px Inter', '500 12px "JetBrains Mono"'].map(f => document.fonts.load(f))).catch(() => {}).then(() => {
   KEYS.forEach(k => drawLegend(k, k.layerShown));
   halves.forEach(hf => { const m = hf.pcb.material[0], old = m.map; m.map = makeSilk(hf.h, OUTLINE[hf.h]); m.needsUpdate = true; old.dispose(); });
-  renderKeys(); $$('.seg').forEach(syncSeg);
+  renderKeys(); fitDock(); $$('.seg').forEach(syncSeg);
 });
 controls.target.set(0, .2, .35);
 const intro = new THREE.Spherical(fitRadius('produit') * 1.5, .5, -.7);
