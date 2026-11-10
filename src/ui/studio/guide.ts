@@ -3,7 +3,8 @@
 import { t, type MessageKey } from '../../i18n';
 import { h, icon } from './dom';
 
-export type GuideTopic = 'keys' | 'hold' | 'tapDance' | 'layers' | 'combos' | 'macros' | 'light' | 'try';
+export type GuideTopic =
+  'keys' | 'shortcuts' | 'hold' | 'tapDance' | 'layers' | 'combos' | 'macros' | 'light' | 'try';
 export type GuideTab = 'keys' | 'light' | 'dynamic' | 'try';
 
 interface Example {
@@ -30,6 +31,20 @@ const TOPICS: readonly Topic[] = [
     intro: 'guide.keys.intro',
     steps: ['guide.keys.s1', 'guide.keys.s2', 'guide.keys.s3'],
     note: 'guide.keys.note',
+  },
+  {
+    id: 'shortcuts',
+    title: 'guide.shortcuts.title',
+    tag: 'LCTL(kc)…',
+    intro: 'guide.shortcuts.intro',
+    steps: ['guide.shortcuts.s1', 'guide.shortcuts.s2'],
+    examples: [
+      { code: 'LCTL(KC_TAB)', text: 'guide.shortcuts.ex1' },
+      { code: 'LSFT(KC_1)', text: 'guide.shortcuts.ex2' },
+      { code: 'LCTL(LSFT(KC_ESC))', text: 'guide.shortcuts.ex3' },
+      { code: 'RALT(KC_0)', text: 'guide.shortcuts.ex4' },
+    ],
+    note: 'guide.shortcuts.note',
   },
   {
     id: 'hold',

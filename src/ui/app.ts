@@ -1,5 +1,6 @@
 import { createDemoKeyboard } from '../demo/demo-keyboard';
 import { FakeKeyboard } from '../protocol/fake-keyboard';
+import { KeyCapture } from '../editor/key-capture';
 import { detectHidSupport, type HidSupport } from '../env/support';
 import { readLabelLayout, saveLabelLayout } from '../env/label-layout';
 import { readKeyboardView, saveKeyboardView, type KeyboardViewPref } from '../env/keyboard-view-pref';
@@ -135,6 +136,9 @@ export class App {
   private keyboardLayer: number | undefined;
   /** Moitié branchée au PC et lien avec l'autre, lus dans la réponse info de la commande 0xC0. */
   private link: SplitLink | undefined;
+  /** Capture armée : la prochaine touche tapée sur le clavier de l'ordinateur est affectée à la touche choisie. */
+  private capturing = false;
+  private readonly keyCapture = new KeyCapture();
   private linkTimer: number | undefined;
   private deviceHalves: HTMLElement | undefined;
   private ui!: HTMLElement;
@@ -201,6 +205,9 @@ export class App {
     });
     window.addEventListener('resize', () => {
       this.layoutScene();
+    });
+    window.addEventListener('blur', () => {
+      this.keyCapture.reset();
     });
     if (this.support === 'ok') {
       navigator.hid.addEventListener('disconnect', (event) => {
@@ -725,7 +732,7 @@ export class App {
       layout: this.layout,
       onPick: (code) => void this.assign(code),
     });
-    const keyHead = h('div', { class: 'panel-part', id: 'key-details' });
+    const keyHead = h('div', { class: 'panel-part', id: 'key-details', tabindex: -1 });
     const holdLink = h('button', {
       class: 'link',
       type: 'button',
@@ -927,6 +934,7 @@ export class App {
   }
 
   private setTab(tab: InspectorTab, refresh = true): void {
+    if (tab !== 'keys') this.stopCapture();
     this.tab = tab;
     this.tabs.set(tab);
     for (const [id, panel] of Object.entries(this.panels)) panel.hidden = id !== tab;
@@ -1522,6 +1530,9 @@ export class App {
     const { client, catalog, profile, keymap } = session;
     const name = layerName(profile, this.layer);
     if (!this.selected) {
+      // plus de touche choisie : la capture s'arrête (sans redessiner, on est déjà en train de le faire)
+      this.capturing = false;
+      this.keyCapture.reset();
       let assigned = 0;
       let transparent = 0;
       for (const k of session.keys) {
@@ -1591,6 +1602,22 @@ export class App {
       });
       return button;
     });
+    const capture = h(
+      'button',
+      {
+        type: 'button',
+        class: `btn capture${this.capturing ? ' is-armed' : ''}`,
+        id: 'key-capture',
+        'aria-pressed': String(this.capturing),
+        title: t('capture.label'),
+      },
+      icon('keyboard', 16, 2),
+      h('span', { text: this.capturing ? t('capture.armed') : t('capture.start') }),
+    );
+    capture.addEventListener('click', () => {
+      if (this.capturing) this.stopCapture();
+      else this.startCapture();
+    });
     ws.keyHead.replaceChildren(
       h(
         'div',
@@ -1609,6 +1636,8 @@ export class App {
           }),
         ),
       ),
+      capture,
+      ...(this.capturing ? [h('p', { class: 'capture-hint', text: t('capture.hint') })] : []),
       h(
         'div',
         { class: 'group' },
@@ -2049,7 +2078,56 @@ export class App {
   // Clavier de l'ordinateur : raccourcis, palette, miroir des frappes
   // ---------------------------------------------------------------------------------------------
 
+  /** Arme la capture : la prochaine touche tapée (avec ses modificateurs) est affectée à la touche choisie. */
+  private startCapture(): void {
+    if (!this.session || !this.selected) return;
+    this.capturing = true;
+    this.keyCapture.reset();
+    this.refresh();
+    // le focus quitte le bouton : Espace ou Entrée sont capturés au lieu de le relancer
+    this.ws?.keyHead.focus();
+    this.glow(900);
+  }
+
+  private stopCapture(): void {
+    if (!this.capturing) return;
+    this.capturing = false;
+    this.keyCapture.reset();
+    if (this.ws && this.session) this.refresh();
+  }
+
+  /** La frappe va-t-elle à la capture ? Pas dans un champ de saisie, ni sous une feuille ou la palette. */
+  private captures(event: KeyboardEvent): boolean {
+    const target = event.target;
+    return (
+      this.capturing &&
+      this.tab === 'keys' &&
+      Boolean(this.selected) &&
+      !this.palette.open &&
+      !this.guide.open &&
+      this.device.hidden &&
+      !document.querySelector('dialog[open]') &&
+      !(
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      )
+    );
+  }
+
   private onKeyDown(event: KeyboardEvent): void {
+    if (this.captures(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === 'Escape') {
+        this.stopCapture();
+        return;
+      }
+      if (event.repeat) return;
+      const code = this.keyCapture.down(event.code, this.layout === 'azerty');
+      if (code !== undefined) void this.assign(code);
+      return;
+    }
     const mod = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
     if (mod && !event.altKey && key === 'k') {
@@ -2092,6 +2170,14 @@ export class App {
   }
 
   private onKeyUp(event: KeyboardEvent): void {
+    if (this.capturing) {
+      // un modificateur appuyé puis relâché seul (Ctrl, Maj…) est affecté à son relâchement
+      const code = this.keyCapture.up(event.code);
+      if (code !== undefined && this.captures(event)) {
+        event.preventDefault();
+        void this.assign(code);
+      }
+    }
     const key = this.physical.get(event.code);
     if (!key) return;
     this.physical.delete(event.code);
