@@ -177,8 +177,9 @@ Valeurs multi-octets **big-endian côté VIA** (keycodes, offsets), **little-end
   écrites, une par une, plutôt qu'un bloc ; import partiel « keymap seule » pas encore proposé)*
 - [ ] Le RGB n'est pas dans le `.vil` : export complémentaire optionnel (JSON) sans casser la compatibilité.
 - [ ] **Instantané local automatique** (IndexedDB, par UID) à chaque connexion et après chaque modification.
-  *(partiel : instantané `localStorage` avant chaque import + bouton manuel, 5 derniers gardés ; pas encore à la
-  connexion ni par UID)*
+  *(partiel : `localStorage`, rangé par UID, 5 derniers par clavier et 20 en tout ; à chaque connexion si l'état a
+  changé, avant chaque import, et à la main ; pas encore après chaque modification, l'historique Annuler couvrant
+  la session)*
 - [ ] **Détection d'un reflash** : chaque compilation Vial remet la keymap par défaut (identifiant de build
   aléatoire). Si la keymap lue = celle par défaut et qu'un instantané plus riche existe → proposer de restaurer.
 - [x] Format validé par **un `.vil` réel exporté de Vial** : fixture `tests/fixtures/colagan-v2-default.vil`

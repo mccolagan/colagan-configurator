@@ -28,8 +28,8 @@ Cahier des charges et avancement : [`SPEC.md`](SPEC.md). Firmware : dépôt `col
   [`maquette-3d.html`](https://mccolagan.github.io/colagan-configurator/maquette-3d.html).
 - **Essai** : simulation des couches (MO, TO, SEL x3…) sur la keymap réelle, sans rien envoyer au clavier.
 - **Macros & co** : macros (texte converti en frappes AZERTY), tap-dance, combos.
-- **Sauvegarde** (pastille de connexion) : export / import `.vil` compatible Vial, instantanés locaux avant
-  import.
+- **Sauvegarde** (pastille de connexion) : export / import `.vil` compatible Vial, instantanés locaux rangés par
+  clavier, pris à chaque connexion (si l'état a changé) et avant chaque import.
 - **Mode démo** : clavier simulé, sans matériel.
 
 Couleurs par couche et aperçu : firmware Colagan avec la commande `0xC0` v2 (voir le dépôt firmware). Avec un

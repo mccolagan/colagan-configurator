@@ -166,8 +166,8 @@
   "backup.export": "Exporter (.vil)",
   "backup.import": "Importer un .vil…",
   "backup.snapshotNow": "Créer un instantané",
-  "backup.snapshots": "Instantanés de ce navigateur",
-  "backup.noSnapshot": "Aucun instantané pour l'instant : un instantané est créé automatiquement avant chaque import.",
+  "backup.snapshots": "Instantanés de ce clavier (dans ce navigateur)",
+  "backup.noSnapshot": "Aucun instantané pour l'instant : un instantané est pris à chaque connexion du clavier et avant chaque import.",
   "backup.download": "Télécharger",
   "backup.restore": "Restaurer",
   "backup.reading": "Lecture du clavier…",
@@ -445,5 +445,7 @@
   "guide.shortcuts.ex2": "Maj + 1",
   "guide.shortcuts.ex3": "Ctrl + Maj + Échap",
   "guide.shortcuts.ex4": "AltGr + 0, soit @ en AZERTY",
-  "guide.shortcuts.note": "Le navigateur et le système gardent certains raccourcis (Ctrl+Tab, Ctrl+W, Alt+Tab…) : la capture ne les reçoit pas, tape-les dans « Keycode avancé »."
+  "guide.shortcuts.note": "Le navigateur et le système gardent certains raccourcis (Ctrl+Tab, Ctrl+W, Alt+Tab…) : la capture ne les reçoit pas, tape-les dans « Keycode avancé ».",
+  "backup.connectLabel": "À la connexion",
+  "backup.connectSnapshotError": "Instantané de connexion impossible : {message}"
 }

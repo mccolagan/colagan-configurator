@@ -42,7 +42,7 @@ import type {
   StackLayer,
 } from './keyboard-3d/keyboard-3d';
 import { KEYCODE_MIME, KeycodePicker, RISKY_KEYCODES } from './keycode-picker';
-import { renderBackupPanel } from './backup-panel';
+import { renderBackupPanel, snapshotOnConnect } from './backup-panel';
 import { DynamicPanel } from './dynamic-panel';
 import { cssColor, renderColorPanel } from './color-panel';
 import { unlockKeyboard } from './unlock-dialog';
@@ -680,6 +680,8 @@ export class App {
       });
     this.renderWorkspace();
     this.startLinkPoll();
+    // filet de sécurité : l'état complet du clavier est gardé dans ce navigateur à chaque connexion
+    if (!demo) void this.snapshotAtConnect();
     this.k3d?.flash();
     this.toasts.show(
       demo
@@ -835,6 +837,18 @@ export class App {
       if (!session.preview.active) void session.preview.refreshInfo();
     }, LINK_POLL_MS);
     if (!session.preview.active) void session.preview.refreshInfo();
+  }
+
+  private async snapshotAtConnect(): Promise<void> {
+    const session = this.session;
+    if (!session) return;
+    try {
+      const positions = new Set(session.keys.map((k) => keyId(k.row, k.col)));
+      if (!(await snapshotOnConnect({ client: session.client, catalog: session.catalog, positions })))
+        this.toasts.show(t('backup.snapshotFailed'), 'warn');
+    } catch (error) {
+      this.toasts.show(t('backup.connectSnapshotError', { message: errorMessage(error) }), 'warn');
+    }
   }
 
   private stopLinkPoll(): void {

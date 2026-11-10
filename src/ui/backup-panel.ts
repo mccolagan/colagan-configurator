@@ -1,5 +1,11 @@
-// Onglet « Sauvegarde » : export / import .vil (format Vial) et instantanés automatiques.
-import { addSnapshot, downloadText, listSnapshots, vilFileName } from '../backup/snapshots';
+// Sauvegarde (feuille du clavier) : export / import .vil (format Vial) et instantanés, rangés par clavier.
+import {
+  addSnapshot,
+  downloadText,
+  listSnapshots,
+  SNAPSHOTS_CHANGED,
+  vilFileName,
+} from '../backup/snapshots';
 import {
   applyDiff,
   ApplyError,
@@ -27,8 +33,24 @@ export interface BackupPanelOptions {
 
 type Level = 'ok' | 'warn' | 'error' | 'info';
 
+/** Clé de rangement des instantanés : l'UID Vial du clavier, en hexadécimal. */
+export const keyboardKey = (client: KeyboardClient): string => client.info.uid.toString(16);
+
+/**
+ * Instantané de l'état complet du clavier (keymap, macros, tap-dance, combos, réglages), pris à la connexion ;
+ * rien de nouveau si l'état n'a pas changé depuis le dernier instantané de ce clavier.
+ */
+export async function snapshotOnConnect(
+  options: Pick<BackupPanelOptions, 'client' | 'catalog' | 'positions'>,
+): Promise<boolean> {
+  const { client, catalog, positions } = options;
+  const vil = stringifyVil(stateToVil(client.info, await readKeyboardState(client), catalog, positions));
+  return addSnapshot(t('backup.connectLabel'), vil, { uid: keyboardKey(client), skipIfSame: true });
+}
+
 export function renderBackupPanel(options: BackupPanelOptions): HTMLElement {
   const { client, catalog, positions } = options;
+  const uid = keyboardKey(client);
   const panel = document.createElement('section');
   panel.className = 'backup';
   panel.setAttribute('aria-label', t('view.backup'));
@@ -91,13 +113,11 @@ export function renderBackupPanel(options: BackupPanelOptions): HTMLElement {
     stringifyVil(stateToVil(client.info, await readKeyboardState(client), catalog, positions));
 
   const snapshot = async (label: string): Promise<boolean> => {
-    const ok = addSnapshot(label, await currentVil());
-    renderSnapshots();
-    return ok;
+    return addSnapshot(label, await currentVil(), { uid });
   };
 
   function renderSnapshots(): void {
-    const snapshots = listSnapshots();
+    const snapshots = listSnapshots(uid);
     snapshotList.replaceChildren(
       ...snapshots.map((s) => {
         const item = document.createElement('li');
@@ -182,8 +202,8 @@ export function renderBackupPanel(options: BackupPanelOptions): HTMLElement {
       const saved = addSnapshot(
         t('backup.autoLabel', { source }),
         stringifyVil(stateToVil(client.info, current, catalog, positions)),
+        { uid },
       );
-      renderSnapshots();
       if (!saved) say('warn', t('backup.snapshotFailed'));
       const report = await applyDiff(client, diff, target, {
         ensureUnlocked: options.ensureUnlocked,
@@ -247,6 +267,17 @@ export function renderBackupPanel(options: BackupPanelOptions): HTMLElement {
     void file.text().then((text) => importText(text, file.name));
   });
 
+  // liste tenue à jour (instantané pris à la connexion, après un import…) tant que la feuille existe
+  let mounted = false;
+  const onChange = (): void => {
+    if (panel.isConnected) {
+      mounted = true;
+      renderSnapshots();
+    } else if (mounted) {
+      document.removeEventListener(SNAPSHOTS_CHANGED, onChange);
+    }
+  };
+  document.addEventListener(SNAPSHOTS_CHANGED, onChange);
   renderSnapshots();
   return panel;
 }
