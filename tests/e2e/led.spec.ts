@@ -24,13 +24,18 @@ test('« Couche affichée » montre les couleurs de la couche sélectionnée', a
   await expect(page.getByRole('tab', { name: '0 · BASE' })).toHaveClass(/tab--keyboard/);
 });
 
-test('« Clavier en direct » montre la couche active du clavier, pas celle du site', async ({ page }) => {
+test('« Clavier en direct » montre aussi les couleurs de la couche, dans chaque onglet', async ({ page }) => {
   await display(page);
   await page.getByRole('radio', { name: 'Clavier en direct' }).click();
+  await page.keyboard.press('Escape');
   await page.getByRole('tab', { name: '2 · FPS' }).click();
-  await expect(led(page, '5,0')).toHaveAttribute('data-led', 'on');
-  await expect(led(page, '5,0')).not.toHaveCSS('fill', 'rgb(0, 0, 255)');
+  await expect(led(page, '5,0')).toHaveCSS('fill', 'rgb(0, 0, 255)');
   await expect(page.locator('#led-status')).toHaveText('Aperçu en direct des LED.');
+  for (const tab of ['Macros & co', 'Essai', 'Touches']) {
+    await page.getByRole('tab', { name: tab }).click();
+    await expect(led(page, '5,0')).toHaveCSS('fill', 'rgb(0, 0, 255)');
+    await expect(led(page, '5,5')).toHaveCSS('fill', 'rgb(255, 255, 0)');
+  }
 });
 
 test("« Masqué » retire l'éclairage, et le choix est gardé d'une visite à l'autre", async ({ page }) => {

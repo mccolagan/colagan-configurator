@@ -1162,13 +1162,15 @@ export class App {
   }
 
   /**
-   * Couleur de chaque touche sur le dessin : couleurs enregistrées de la couche (exactes) quand on montre la
-   * couche ; l'état réel du clavier pour les touches transparentes et en mode « Clavier en direct ».
+   * Couleur de chaque touche sur le dessin, dans tous les onglets : couleurs enregistrées de la couche affichée
+   * (exactes), et l'état réel du clavier pour les touches transparentes. « Clavier en direct » ne change que le
+   * clavier lui-même (il garde son éclairage au lieu de montrer la couche) ; « Masqué » ne garde les couleurs
+   * que dans l'onglet Lumière, pour peindre.
    */
   private paintPreview(): void {
     const session = this.session;
     if (!session) return;
-    const showLayer = Boolean(session.lighting) && (this.tab === 'light' || this.ledDisplay === 'layer');
+    const showLayer = Boolean(session.lighting) && (this.tab === 'light' || this.ledDisplay !== 'off');
     const showLive = this.ledDisplay !== 'off';
     if (!showLayer) {
       this.showPaints(showLive ? this.livePaints : new Map());

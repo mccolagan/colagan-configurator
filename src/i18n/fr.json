@@ -80,7 +80,7 @@
   "led.layer": "Couche affichée",
   "led.live": "Clavier en direct",
   "led.layerHint": "Couleurs de la couche sélectionnée ; le clavier l'affiche aussi pendant ce temps.",
-  "led.liveHint": "Ce que les LED du clavier affichent réellement, couche active comprise.",
+  "led.liveHint": "Couleurs de la couche sélectionnée sur le dessin ; le clavier garde son éclairage réel (couche active, effet en cours).",
   "led.activeTab": "Couche active sur le clavier",
   "colors.label": "Couleurs de la couche",
   "colors.brush": "Pinceau",
