@@ -1,4 +1,5 @@
 // KeyboardEvent.code -> usage HID (= keycode QMK de base), pour retrouver la touche frappée sur le vrai clavier.
+import { resolveKey, type KeymapView } from './layer-access';
 
 const NAMED: Record<string, number> = {
   Enter: 0x28,
@@ -81,4 +82,38 @@ export function sendsUsage(keycode: number, usage: number): boolean {
   if (keycode === usage) return true;
   // 0x0100-0x1FFF : modificateurs + touche ; 0x2000-0x3FFF : mod-tap ; 0x4000-0x4FFF : LT(n, kc)
   return keycode >= 0x100 && keycode < 0x5000 && (keycode & 0xff) === usage;
+}
+
+export interface TypedKey {
+  readonly row: number;
+  readonly col: number;
+  readonly code: number;
+}
+
+/**
+ * Touche qui a pu envoyer ces usages, couche par couche. Sur une couche, une touche posée sur la couche
+ * elle-même passe avant une transparente qui retombe plus bas : sinon le Z d'une couche de jeu (moitié
+ * droite) est trouvé sur la moitié gauche, transparente jusqu'au Z de la couche 0.
+ */
+export function findTypedKey(
+  view: KeymapView,
+  keys: readonly { readonly row: number; readonly col: number }[],
+  layers: readonly number[],
+  usages: readonly number[],
+  skip?: (row: number, col: number) => boolean,
+): TypedKey | undefined {
+  for (const layer of layers) {
+    let fallthrough: TypedKey | undefined;
+    for (const usage of usages) {
+      for (const { row, col } of keys) {
+        if (skip?.(row, col)) continue;
+        const resolved = resolveKey(view, layer, row, col);
+        if (!sendsUsage(resolved.code, usage)) continue;
+        if (resolved.layer === layer) return { row, col, code: resolved.code };
+        fallthrough ??= { row, col, code: resolved.code };
+      }
+    }
+    if (fallthrough) return fallthrough;
+  }
+  return undefined;
 }

@@ -8,7 +8,7 @@ import { readLedDisplay, saveLedDisplay, type LedDisplay } from '../env/led-prev
 import { applyTheme, readTheme } from '../env/theme';
 import { DynamicState } from '../editor/dynamic-state';
 import { FirmwareSim } from '../editor/firmware-sim';
-import { hidUsages, sendsUsage } from '../editor/hid-usage';
+import { findTypedKey, hidUsages } from '../editor/hid-usage';
 import { layerAccesses, resolveKey, type KeymapView } from '../editor/layer-access';
 import { trappedLayers } from '../editor/layer-guard';
 import {
@@ -1904,18 +1904,12 @@ export class App {
     const usages = hidUsages(code);
     if (!usages.length) return undefined;
     const layers = [...new Set([this.keyboardLayer ?? this.layer, this.layer, 0])];
-    for (const layer of layers) {
-      for (const usage of usages) {
-        for (const k of session.keys) {
-          const resolved = resolveKey(session.keymap, layer, k.row, k.col);
-          if (sendsUsage(resolved.code, usage)) {
-            const label = flatLabel(keyLabel(session.catalog, resolved.code, this.layout));
-            return { row: k.row, col: k.col, label };
-          }
-        }
-      }
-    }
-    return undefined;
+    // une moitié non reliée ne peut pas avoir été frappée
+    const hit = findTypedKey(session.keymap, session.keys, layers, usages, (row, col) =>
+      Boolean(this.k3d?.isAbsent(row, col)),
+    );
+    if (!hit) return undefined;
+    return { row: hit.row, col: hit.col, label: flatLabel(keyLabel(session.catalog, hit.code, this.layout)) };
   }
 
   private mirrorKey(event: KeyboardEvent): void {

@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { parseVil } from '../io/vil';
 import { KeycodeCatalog } from '../keycodes/catalog';
 import { FirmwareSim } from './firmware-sim';
-import { hidUsages, sendsUsage } from './hid-usage';
+import { parseKle } from '../keyboard/kle';
+import { findTypedKey, hidUsages, sendsUsage } from './hid-usage';
 import { layerAccesses, layerTarget, parentLayer, resolveKey, type KeymapView } from './layer-access';
 
 // keymap réelle du Colagan V2 (8 couches, matrice 10 × 6)
@@ -100,5 +101,18 @@ describe('frappes du vrai clavier', () => {
     expect(sendsUsage(0x04, 0x04)).toBe(true);
     expect(sendsUsage(catalog.deserialize('LT(2, KC_SPC)'), 0x2c)).toBe(true);
     expect(sendsUsage(catalog.deserialize('MO(1)'), 0x21)).toBe(false);
+  });
+
+  it('préfère la touche posée sur la couche à une transparente qui retombe sur la couche 0', () => {
+    const definition = JSON.parse(readFileSync('tests/fixtures/colagan-v2-definition.json', 'utf8')) as {
+      layouts: { keymap: unknown[] };
+    };
+    const keys = parseKle(definition.layouts.keymap);
+    const kcW = hidUsages('KeyW');
+    // couche 3 : W en [6,2] (droite) ; la gauche, transparente, retombe sur le W de la couche 0 en [1,3],
+    // placé avant dans l'ordre du layout
+    expect(findTypedKey(view, keys, [3, 0], kcW)).toMatchObject({ row: 6, col: 2 });
+    expect(findTypedKey(view, keys, [0], kcW)).toMatchObject({ row: 1, col: 3 });
+    expect(findTypedKey(view, keys, [3, 0], kcW, (row) => row >= 5)).toMatchObject({ row: 1, col: 3 });
   });
 });

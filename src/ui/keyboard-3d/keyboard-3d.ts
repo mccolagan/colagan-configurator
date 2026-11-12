@@ -778,6 +778,12 @@ export class Keyboard3D {
     this.wake(1.2);
   }
 
+  /** La touche est-elle sur la moitié non reliée (masquée) ? */
+  isAbsent(row: number, col: number): boolean {
+    const absent = this.absentHalf();
+    return absent !== undefined && this.keys.get(keyId(row, col))?.half.index === absent;
+  }
+
   flash(): void {
     for (const key of this.keys.values()) key.flash = Math.max(key.flash, 0.7 - key.chain * 0.01);
     this.wake(1);
